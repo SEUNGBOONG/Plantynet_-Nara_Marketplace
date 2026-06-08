@@ -2,7 +2,6 @@ import os
 import requests
 import datetime
 import smtplib
-from urllib.parse import quote  # 🌟 한글 키워드를 조달청 전산용으로 변환해주는 내장 도구
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
@@ -17,87 +16,166 @@ SLACK_CHANNEL = os.environ.get('SLACK_CHANNEL')
 # 2. 사장님의 핵심 검색 키워드 4개
 KEYWORDS = ['스쿨넷', '융합통신망', '교육망', '스마트기기']
 
+SEARCH_DAYS = 180
+CHUNK_DAYS = 30
+
+# PPSSrch API는 키워드 파라미터로 서버 검색해야 함 (전체 목록 후 필터링 시 999건 한도에 걸림)
+API_SOURCES = [
+    {
+        "url": "http://apis.data.go.kr/1230000/OrderPlanInfoService02/getOrderPlanListInfoPPSSrch",
+        "search_param": "bsnsNm",
+        "type_tag": "[발주계획]",
+        "title_keys": ("bsnsNm", "bizNm", "bidNtceNm"),
+        "inst_keys": ("orderInsttNm", "demandInsttNm", "opntInsttNm"),
+        "url_keys": ("orderPlanDtlUrl", "bidNtceDtlUrl"),
+        "date_keys": ("rgstDt", "registDt", "bidNtceBgngDt"),
+    },
+    {
+        "url": "http://apis.data.go.kr/1230000/HrcspatBsisBizInfoService03/getHrcspatBsisBizListInfoPPSSrch",
+        "search_param": "prdctClsfcNoNm",
+        "type_tag": "[사전규격]",
+        "title_keys": ("prdctClsfcNoNm", "bsnsNm", "bidNtceNm"),
+        "inst_keys": ("orderInsttNm", "demandInsttNm", "opntInsttNm"),
+        "url_keys": ("bfSpecDtlUrl", "bidNtceDtlUrl"),
+        "date_keys": ("opninRgstClseDt", "rgstDt", "registDt"),
+    },
+    {
+        "url": "http://apis.data.go.kr/1230000/BidPublicInfoService04/getBidPblancListInfoServcPPSSrch",
+        "search_param": "bidNtceNm",
+        "type_tag": "[입찰공고-용역]",
+        "title_keys": ("bidNtceNm",),
+        "inst_keys": ("dminsttNm", "demandInsttNm", "opntInsttNm"),
+        "url_keys": ("bidNtceDtlUrl",),
+        "date_keys": ("bidNtceBgngDt", "rgstDt", "registDt"),
+    },
+    {
+        "url": "http://apis.data.go.kr/1230000/BidPublicInfoService04/getBidPblancListInfoThngPPSSrch",
+        "search_param": "bidNtceNm",
+        "type_tag": "[입찰공고-물품]",
+        "title_keys": ("bidNtceNm", "prdrstIdntNoNm"),
+        "inst_keys": ("dminsttNm", "demandInsttNm", "opntInsttNm"),
+        "url_keys": ("bidNtceDtlUrl",),
+        "date_keys": ("bidNtceBgngDt", "rgstDt", "registDt"),
+    },
+]
+
+
+def _normalize_service_key(api_key):
+    if not api_key:
+        return ''
+    return api_key.replace('%3B', ';').replace('%2B', '+').replace('%2F', '/')
+
+
+def _first_value(item, keys):
+    for key in keys:
+        value = item.get(key)
+        if value:
+            return value
+    return ''
+
+
+def _parse_items(body):
+    items = body.get('items')
+    if not items or items == '':
+        return []
+    if isinstance(items, dict):
+        item = items.get('item', items)
+        if isinstance(item, list):
+            return item
+        return [item] if item else []
+    if isinstance(items, list):
+        return items
+    return [items]
+
+
+def _get_date_chunks(now, total_days, chunk_days):
+    chunks = []
+    end = now
+    remaining = total_days
+    while remaining > 0:
+        span = min(chunk_days, remaining)
+        start = end - datetime.timedelta(days=span)
+        chunks.append((
+            start.strftime('%Y%m%d') + '0000',
+            end.strftime('%Y%m%d') + '2359',
+        ))
+        end = start
+        remaining -= span
+    return chunks
+
+
+def _fetch_source_items(source, keyword, start_dt, end_dt, service_key):
+    params = {
+        'serviceKey': service_key,
+        'type': 'json',
+        'inqryDiv': '1',
+        'inqryBgnDt': start_dt,
+        'inqryEndDt': end_dt,
+        'pageNo': '1',
+        'numOfRows': '999',
+        source['search_param']: keyword,
+    }
+    response = requests.get(source['url'], params=params, timeout=15)
+    response.raise_for_status()
+    data = response.json()
+    header = data.get('response', {}).get('header', {})
+    if header.get('resultCode') != '00':
+        raise RuntimeError(header.get('resultMsg', '알 수 없는 API 오류'))
+    return _parse_items(data.get('response', {}).get('body', {}))
+
 
 def get_jodal_pblanc():
     now = datetime.datetime.now()
     today_str = now.strftime('%Y%m%d')
+    service_key = _normalize_service_key(API_KEY)
+
+    if not service_key:
+        print("DATA_GO_KR_API_KEY가 설정되지 않았습니다.")
+        return [], []
 
     new_items = []
     ongoing_items = []
     seen_urls = set()
+    date_chunks = _get_date_chunks(now, SEARCH_DAYS, CHUNK_DAYS)
 
-    # 3가지 API 주소 매핑
-    urls = [
-        "http://apis.data.go.kr/1230000/OrderPlanInfoService02/getOrderPlanListInfoPPSSrch",  # 발주계획
-        "http://apis.data.go.kr/1230000/HrcspatBsisBizInfoService03/getHrcspatBsisBizListInfoPPSSrch",  # 사전규격
-        "http://apis.data.go.kr/1230000/BidPublicInfoService04/getBidPblancListInfoServcPPSSrch",  # 입찰공고(용역)
-        "http://apis.data.go.kr/1230000/BidPublicInfoService04/getBidPblancListInfoThngPPSSrch"  # 입찰공고(물품)
-    ]
+    for keyword in KEYWORDS:
+        for source in API_SOURCES:
+            for start_dt, end_dt in date_chunks:
+                try:
+                    items = _fetch_source_items(source, keyword, start_dt, end_dt, service_key)
+                except Exception as e:
+                    print(f"API 조회 오류 [{source['type_tag']} / {keyword}]: {e}")
+                    continue
 
-    # 최근 6개월(180일)을 30일씩 쪼개서 조회
-    for i in range(6):
-        start_day = (now - datetime.timedelta(days=(i + 1) * 30)).strftime('%Y%m%d')
-        end_day = (now - datetime.timedelta(days=i * 30)).strftime('%Y%m%d')
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
 
-        for url in urls:
-            # 🌟 조달청 전산 오류를 막기 위해 인증키를 강제로 언인코딩(디코딩) 상태로 가공
-            pure_key = API_KEY.replace('%3B', ';').replace('%2B', '+').replace('%2F', '/') if API_KEY else ''
+                    title = _first_value(item, source['title_keys'])
+                    if not title:
+                        continue
 
-            # 기본 파라미터 셋팅
-            base_params = f"?serviceKey={pure_key}&numOfRows=999&pageNo=1&inqryDiv=1&inqryBgnDt={start_day}0000&inqryEndDt={end_day}2359&type=json"
+                    url_link = _first_value(item, source['url_keys']) or '#'
+                    if url_link in seen_urls:
+                        continue
+                    seen_urls.add(url_link)
 
-            try:
-                # 🌟 조달청은 주소창에 파라미터를 통째로 이어붙여서 쏴야 에러가 안 납니다.
-                full_url = url + base_params
-                response = requests.get(full_url, timeout=15)
+                    inst = _first_value(item, source['inst_keys']) or '알수없음'
+                    date_str = _first_value(item, source['date_keys'])
 
-                if response.status_code == 200:
-                    data = response.json()
-                    body = data.get('response', {}).get('body', {})
-                    items = body.get('items', [])
+                    pblanc_data = {
+                        'title': f"{source['type_tag']} {title}",
+                        'url': url_link,
+                        'inst': inst,
+                        'date': date_str,
+                    }
 
-                    if isinstance(items, dict) and 'item' in items:
-                        items = items['item']
-                    if not isinstance(items, list):
-                        items = [items] if items else []
+                    if today_str in date_str.replace('-', '').replace('/', ''):
+                        new_items.append(pblanc_data)
+                    else:
+                        ongoing_items.append(pblanc_data)
 
-                    for item in items:
-                        if not isinstance(item, dict): continue
-
-                        title = item.get('bidNtceNm') or item.get('bsnsNm') or item.get('prdrstIdntNoNm', '')
-                        inst = item.get('demandInsttNm') or item.get('opntInsttNm', '알수없음')
-                        url_link = item.get('bidNtceDtlUrl') or item.get('orderPlanDtlUrl') or item.get('bfSpecDtlUrl',
-                                                                                                        '#')
-                        bgng_dt_str = item.get('bidNtceBgngDt') or item.get('registDt') or item.get('rgstDt', '')
-
-                        if not title: continue
-
-                        # 🌟 사장님의 키워드가 제목에 포함되어 있는지 검사
-                        if any(kw in title for kw in KEYWORDS):
-                            if url_link not in seen_urls:
-                                seen_urls.add(url_link)
-
-                                if "OrderPlan" in url:
-                                    type_tag = "[발주계획]"
-                                elif "HrcspatBsis" in url:
-                                    type_tag = "[사전규격]"
-                                else:
-                                    type_tag = "[입찰공고]"
-
-                                pblanc_data = {
-                                    'title': f"{type_tag} {title}",
-                                    'url': url_link,
-                                    'inst': inst,
-                                    'date': bgng_dt_str
-                                }
-
-                                if today_str in bgng_dt_str.replace('-', ''):
-                                    new_items.append(pblanc_data)
-                                else:
-                                    ongoing_items.append(pblanc_data)
-            except:
-                pass
-
+    print(f"검색 완료: 신규 {len(new_items)}건 / 누적 {len(ongoing_items)}건")
     return new_items, ongoing_items
 
 
