@@ -1,0 +1,31 @@
+name: G2B Notice Checker
+
+on:
+  schedule:
+    # 한국시간(KST) 월~금 오전 9시 ~ 오후 6시까지 매 정각 작동
+    - cron: '0 0-9 * * 1-5'
+  workflow_dispatch: # 필요할 때 언제든 수동으로 바로 실행시키는 버튼 생성
+
+jobs:
+  check-and-alert:
+    runs-on: ubuntu-latest
+    steps:
+    - name: 소스코드 가져오기
+      uses: actions/checkout@v4
+
+    - name: 파이썬 컴퓨터 세팅
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: 라이브러리 설치
+      run: |
+        pip install requests
+
+    - name: 나라장터 봇 실행
+      env:
+        DATA_GO_KR_API_KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
+        TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+        NAVER_EMAIL: ${{ secrets.NAVER_EMAIL }}
+        NAVER_PASSWORD: ${{ secrets.NAVER_PASSWORD }}
+      run: python g2b_bot.py
