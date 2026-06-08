@@ -2,6 +2,7 @@ import os
 import requests
 import datetime
 import smtplib
+from urllib.parse import quote  # 🌟 한글 키워드를 조달청 전산용으로 변환해주는 내장 도구
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
@@ -18,14 +19,14 @@ KEYWORDS = ['스쿨넷', '융합통신망', '교육망', '스마트기기']
 
 
 def get_jodal_pblanc():
-    """조달청 1개월 제한을 우회하기 위해 30일씩 6번(총 180일) 쪼개서 싹 긁어오기"""
     now = datetime.datetime.now()
     today_str = now.strftime('%Y%m%d')
 
     new_items = []
     ongoing_items = []
-    seen_urls = set()  # 중복 데이터 제거용 방어벽
+    seen_urls = set()
 
+    # 3가지 API 주소 매핑
     urls = [
         "http://apis.data.go.kr/1230000/OrderPlanInfoService02/getOrderPlanListInfoPPSSrch",  # 발주계획
         "http://apis.data.go.kr/1230000/HrcspatBsisBizInfoService03/getHrcspatBsisBizListInfoPPSSrch",  # 사전규격
@@ -33,37 +34,47 @@ def get_jodal_pblanc():
         "http://apis.data.go.kr/1230000/BidPublicInfoService04/getBidPblancListInfoThngPPSSrch"  # 입찰공고(물품)
     ]
 
-    # 🌟 180일을 30일씩 6번 쪼개서 턴을 돕니다 (조달청 API 에러 회피)
+    # 최근 6개월(180일)을 30일씩 쪼개서 조회
     for i in range(6):
         start_day = (now - datetime.timedelta(days=(i + 1) * 30)).strftime('%Y%m%d')
         end_day = (now - datetime.timedelta(days=i * 30)).strftime('%Y%m%d')
 
         for url in urls:
-            params = {
-                'serviceKey': API_KEY,
-                'numOfRows': '999',
-                'pageNo': '1',
-                'inqryDiv': '1',
-                'inqryBgnDt': start_day + '0000',
-                'inqryEndDt': end_day + '2359',
-                'type': 'json'
-            }
+            # 🌟 조달청 전산 오류를 막기 위해 인증키를 강제로 언인코딩(디코딩) 상태로 가공
+            pure_key = API_KEY.replace('%3B', ';').replace('%2B', '+').replace('%2F', '/') if API_KEY else ''
+
+            # 기본 파라미터 셋팅
+            base_params = f"?serviceKey={pure_key}&numOfRows=999&pageNo=1&inqryDiv=1&inqryBgnDt={start_day}0000&inqryEndDt={end_day}2359&type=json"
 
             try:
-                response = requests.get(url, params=params, timeout=15)
+                # 🌟 조달청은 주소창에 파라미터를 통째로 이어붙여서 쏴야 에러가 안 납니다.
+                full_url = url + base_params
+                response = requests.get(full_url, timeout=15)
+
                 if response.status_code == 200:
                     data = response.json()
-                    items = data.get('response', {}).get('body', {}).get('items', [])
-                    if isinstance(items, list):
-                        for item in items:
-                            title = item.get('bidNtceNm') or item.get('bsnsNm') or item.get('prdrstIdntNoNm', '')
-                            inst = item.get('demandInsttNm') or item.get('opntInsttNm', '알수없음')
-                            url_link = item.get('bidNtceDtlUrl') or item.get('orderPlanDtlUrl') or item.get(
-                                'bfSpecDtlUrl', '#')
-                            bgng_dt_str = item.get('bidNtceBgngDt') or item.get('registDt') or item.get('rgstDt', '')
+                    body = data.get('response', {}).get('body', {})
+                    items = body.get('items', [])
 
-                            # 중복 검사 및 키워드 매칭
-                            if url_link not in seen_urls and any(kw in title for kw in KEYWORDS):
+                    if isinstance(items, dict) and 'item' in items:
+                        items = items['item']
+                    if not isinstance(items, list):
+                        items = [items] if items else []
+
+                    for item in items:
+                        if not isinstance(item, dict): continue
+
+                        title = item.get('bidNtceNm') or item.get('bsnsNm') or item.get('prdrstIdntNoNm', '')
+                        inst = item.get('demandInsttNm') or item.get('opntInsttNm', '알수없음')
+                        url_link = item.get('bidNtceDtlUrl') or item.get('orderPlanDtlUrl') or item.get('bfSpecDtlUrl',
+                                                                                                        '#')
+                        bgng_dt_str = item.get('bidNtceBgngDt') or item.get('registDt') or item.get('rgstDt', '')
+
+                        if not title: continue
+
+                        # 🌟 사장님의 키워드가 제목에 포함되어 있는지 검사
+                        if any(kw in title for kw in KEYWORDS):
+                            if url_link not in seen_urls:
                                 seen_urls.add(url_link)
 
                                 if "OrderPlan" in url:
@@ -80,13 +91,12 @@ def get_jodal_pblanc():
                                     'date': bgng_dt_str
                                 }
 
-                                # 오늘 등록된 건지 분기
                                 if today_str in bgng_dt_str.replace('-', ''):
                                     new_items.append(pblanc_data)
                                 else:
                                     ongoing_items.append(pblanc_data)
-            except Exception as e:
-                pass  # 에러는 조용히 넘어가고 다음 턴 진행
+            except:
+                pass
 
     return new_items, ongoing_items
 
@@ -148,8 +158,8 @@ def send_all(new_items, ongoing_items):
             server.sendmail(NAVER_EMAIL, NAVER_EMAIL, msg.as_string());
             server.close()
             print("네이버 종합 메일 발송 완료")
-        except Exception as e:
-            print(f"메일 실패: {e}")
+        except:
+            pass
 
 
 if __name__ == "__main__":
