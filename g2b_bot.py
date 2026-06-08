@@ -18,15 +18,14 @@ KEYWORDS = ['스쿨넷', '융합통신망', '교육망', '스마트기기']
 
 
 def get_jodal_pblanc():
-    """최근 6개월치 '발주계획', '사전규격', '입찰공고'를 전부 수집하기"""
+    """조달청 1개월 제한을 우회하기 위해 30일씩 6번(총 180일) 쪼개서 싹 긁어오기"""
     now = datetime.datetime.now()
     today_str = now.strftime('%Y%m%d')
-    six_months_ago = (now - datetime.timedelta(days=180)).strftime('%Y%m%d')
 
     new_items = []
     ongoing_items = []
+    seen_urls = set()  # 중복 데이터 제거용 방어벽
 
-    # 🌟 발주계획, 사전규격, 입찰공고 API를 모두 연동!
     urls = [
         "http://apis.data.go.kr/1230000/OrderPlanInfoService02/getOrderPlanListInfoPPSSrch",  # 발주계획
         "http://apis.data.go.kr/1230000/HrcspatBsisBizInfoService03/getHrcspatBsisBizListInfoPPSSrch",  # 사전규격
@@ -34,62 +33,65 @@ def get_jodal_pblanc():
         "http://apis.data.go.kr/1230000/BidPublicInfoService04/getBidPblancListInfoThngPPSSrch"  # 입찰공고(물품)
     ]
 
-    for url in urls:
-        params = {
-            'serviceKey': API_KEY,
-            'numOfRows': '999',
-            'pageNo': '1',
-            'inqryDiv': '1',
-            'inqryBgnDt': six_months_ago + '0000',
-            'inqryEndDt': today_str + '2359',
-            'type': 'json'
-        }
+    # 🌟 180일을 30일씩 6번 쪼개서 턴을 돕니다 (조달청 API 에러 회피)
+    for i in range(6):
+        start_day = (now - datetime.timedelta(days=(i + 1) * 30)).strftime('%Y%m%d')
+        end_day = (now - datetime.timedelta(days=i * 30)).strftime('%Y%m%d')
 
-        try:
-            response = requests.get(url, params=params, timeout=20)
-            if response.status_code == 200:
-                data = response.json()
-                items = data.get('response', {}).get('body', {}).get('items', [])
-                if isinstance(items, list):
-                    for item in items:
-                        # 메뉴별 데이터 태그명 차이 극복 가공
-                        title = item.get('bidNtceNm') or item.get('bsnsNm') or item.get('prdrstIdntNoNm', '')
-                        inst = item.get('demandInsttNm') or item.get('opntInsttNm', '알수없음')
-                        url_link = item.get('bidNtceDtlUrl') or item.get('orderPlanDtlUrl') or item.get('bfSpecDtlUrl',
-                                                                                                        '#')
-                        bgng_dt_str = item.get('bidNtceBgngDt') or item.get('registDt') or item.get('rgstDt', '')
+        for url in urls:
+            params = {
+                'serviceKey': API_KEY,
+                'numOfRows': '999',
+                'pageNo': '1',
+                'inqryDiv': '1',
+                'inqryBgnDt': start_day + '0000',
+                'inqryEndDt': end_day + '2359',
+                'type': 'json'
+            }
 
-                        # 메뉴 구분 태그 달아주기
-                        if "OrderPlan" in url:
-                            type_tag = "[발주계획]"
-                        elif "HrcspatBsis" in url:
-                            type_tag = "[사전규격]"
-                        else:
-                            type_tag = "[입찰공고]"
+            try:
+                response = requests.get(url, params=params, timeout=15)
+                if response.status_code == 200:
+                    data = response.json()
+                    items = data.get('response', {}).get('body', {}).get('items', [])
+                    if isinstance(items, list):
+                        for item in items:
+                            title = item.get('bidNtceNm') or item.get('bsnsNm') or item.get('prdrstIdntNoNm', '')
+                            inst = item.get('demandInsttNm') or item.get('opntInsttNm', '알수없음')
+                            url_link = item.get('bidNtceDtlUrl') or item.get('orderPlanDtlUrl') or item.get(
+                                'bfSpecDtlUrl', '#')
+                            bgng_dt_str = item.get('bidNtceBgngDt') or item.get('registDt') or item.get('rgstDt', '')
 
-                        full_title = f"{type_tag} {title}"
+                            # 중복 검사 및 키워드 매칭
+                            if url_link not in seen_urls and any(kw in title for kw in KEYWORDS):
+                                seen_urls.add(url_link)
 
-                        # 키워드 매칭
-                        if any(kw in title for kw in KEYWORDS):
-                            pblanc_data = {
-                                'title': full_title,
-                                'url': url_link,
-                                'inst': inst,
-                                'date': bgng_dt_str
-                            }
+                                if "OrderPlan" in url:
+                                    type_tag = "[발주계획]"
+                                elif "HrcspatBsis" in url:
+                                    type_tag = "[사전규격]"
+                                else:
+                                    type_tag = "[입찰공고]"
 
-                            if today_str in bgng_dt_str.replace('-', ''):
-                                new_items.append(pblanc_data)
-                            else:
-                                ongoing_items.append(pblanc_data)
-        except Exception as e:
-            print(f"조회 중 에러 발생: {e}")
+                                pblanc_data = {
+                                    'title': f"{type_tag} {title}",
+                                    'url': url_link,
+                                    'inst': inst,
+                                    'date': bgng_dt_str
+                                }
+
+                                # 오늘 등록된 건지 분기
+                                if today_str in bgng_dt_str.replace('-', ''):
+                                    new_items.append(pblanc_data)
+                                else:
+                                    ongoing_items.append(pblanc_data)
+            except Exception as e:
+                pass  # 에러는 조용히 넘어가고 다음 턴 진행
 
     return new_items, ongoing_items
 
 
 def make_messenger_text(new_items, ongoing_items):
-    """팀즈 및 슬랙 발송용 메신저 텍스트 포맷 구성"""
     msg = "📢 *[나라장터] 통합 모니터링 리포트*\n\n"
     if new_items:
         msg += "🔥 *오늘 새로 올라온 정보! [최신 업데이트]*\n"
@@ -115,15 +117,14 @@ def send_all(new_items, ongoing_items):
     if TEAMS_WEBHOOK_URL:
         try:
             requests.post(TEAMS_WEBHOOK_URL, json={"text": messenger_text}, timeout=10)
-        except Exception as e:
-            print(f"팀즈 실패: {e}")
+        except:
+            pass
     if SLACK_TOKEN and SLACK_CHANNEL:
         try:
-            res = requests.post("https://slack.com/api/chat.postMessage",
-                                headers={"Authorization": f"Bearer {SLACK_TOKEN}"},
-                                json={"channel": SLACK_CHANNEL, "text": messenger_text}, timeout=10)
-        except Exception as e:
-            print(f"슬랙 실패: {e}")
+            requests.post("https://slack.com/api/chat.postMessage", headers={"Authorization": f"Bearer {SLACK_TOKEN}"},
+                          json={"channel": SLACK_CHANNEL, "text": messenger_text}, timeout=10)
+        except:
+            pass
     if NAVER_EMAIL and NAVER_PASSWORD:
         msg = MIMEMultipart()
         msg['From'] = NAVER_EMAIL;
