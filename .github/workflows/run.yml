@@ -2,7 +2,7 @@ name: G2B Notice Checker
 
 on:
   schedule:
-    # 한국시간(KST) 월~금 오전 9시 ~ 오후 6시까지 매 정각 작동
+    # 한국시간(KST) 월~금 오전 9시 ~ 오후 6시까지 매 정각 작동 (UTC 기준 00:00~09:00)
     - cron: '0 0-9 * * 1-5'
   workflow_dispatch: # 필요할 때 언제든 수동으로 바로 실행시키는 버튼 생성
 
@@ -28,4 +28,6 @@ jobs:
         TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
         NAVER_EMAIL: ${{ secrets.NAVER_EMAIL }}
         NAVER_PASSWORD: ${{ secrets.NAVER_PASSWORD }}
+        SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}        # 🌟 슬랙 토큰 열쇠 장착!
+        SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL }}    # 🌟 슬랙 채널 ID 열쇠 장착!
       run: python g2b_bot.py
