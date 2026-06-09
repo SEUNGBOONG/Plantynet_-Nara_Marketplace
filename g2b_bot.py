@@ -27,22 +27,22 @@ def get_g2b_data():
     # 검색할 핵심 키워드 리스트
     keywords = ["플랜티넷", "오피스가드", "정보보호 바우처", "유해사이트"]
 
-    # ⭐ 404 에러 해결을 위해 조달청 실서버 표준 오퍼레이션 주소로 완전 재조립
+    # ⭐ 안내해주신 주소 기반으로 조달청 표준 오퍼레이션 명칭 완벽 매핑
     api_types = {
-        "발주계획": "https://apis.data.go.kr/1230000/ao/OrderPlanSttusService/getOrderPlanSttusListInfoPPSSrch",
-        "사전규격": "https://apis.data.go.kr/1230000/ao/HrcspatBsisBizInfoService/getHrcspatBsisBizListInfoPPSSrch",
-        "입찰공고-용역": "https://apis.data.go.kr/1230000/ad/BidPublicInfoService/getBidPblancListInfoServcPPSSrch",
-        "입찰공고-물품": "https://apis.data.go.kr/1230000/ad/BidPublicInfoService/getBidPblancListInfoThngPPSSrch"
+        "발주계획": "https://apis.data.go.kr/1230000/ao/OrderPlanSttusService02/getOrderPlanSttusListInfoPPSSrch",
+        "사전규격": "https://apis.data.go.kr/1230000/ao/HrcspSstndrdInfoService/getHrcspSstndrdListInfoPPSSrch",
+        "입찰공고-용역": "https://apis.data.go.kr/1230000/ad/BidPublicInfoService04/getBidPblancListInfoServcPPSSrch",
+        "입찰공고-물품": "https://apis.data.go.kr/1230000/ad/BidPublicInfoService04/getBidPblancListInfoThngPPSSrch"
     }
 
-    # 날짜 세팅 (안정적인 조회를 위해 최근 14일치 데이터 조회)
+    # 날짜 세팅 (최근 14일치 데이터 조회)
     end_dt = datetime.now().strftime('%Y%m%d%H%M')
     start_dt = (datetime.now() - timedelta(days=14)).strftime('%Y%m%d%H%M')
 
     collected_items = []
 
     for name, base_url in api_types.items():
-        # 인증키 인코딩 왜곡 방지를 위해 URL 뒤에 생자(Raw)로 고정 결합
+        # 인증키 왜곡 방지를 위한 Raw URL 결합
         full_url = f"{base_url}?serviceKey={API_KEY}&type=json&inqryDiv=1&inqryBgnDt={start_dt}&inqryEndDt={end_dt}&pageNo=1&numOfRows=100"
 
         try:
@@ -61,7 +61,6 @@ def get_g2b_data():
 
             # 키워드 필터링
             for item in items:
-                # API 필드명 맵핑 구조화
                 title = item.get('orderPlanNm') or item.get('bsisBizNm') or item.get('bidNtceNm') or ""
                 link = item.get('bidNtceDtlUrl') or "https://www.g2b.go.kr"
                 org = item.get('dminsttNm') or item.get('ntceInsttNm') or "공공기관"
@@ -88,7 +87,7 @@ def send_alerts(items):
 
     date_str = datetime.now().strftime('%m/%d')
 
-    # 1. 팀즈(Teams) 알림 포맷
+    # 1. 팀즈(Teams) 알림
     teams_text = f"### 🏛️ [{date_str}] 나라장터 보안 검색 실시간 브리핑\n\n"
     for item in items:
         teams_text += f"**[{item['category']}]** [{item['title']}]({item['link']})<br>└ *발주처: {item['org']} / 일시: {item['date']}*\n\n"
@@ -113,7 +112,7 @@ def send_alerts(items):
         except Exception as e:
             print(f"❌ 팀즈 전송 에러: {e}")
 
-    # 2. 슬랙(Slack) 알림 포맷
+    # 2. 슬랙(Slack) 알림
     if SLACK_TOKEN and SLACK_CHANNEL:
         slack_text = f"🏛️ *[{date_str}] 나라장터 보안 검색 결과*\n\n"
         for item in items:
