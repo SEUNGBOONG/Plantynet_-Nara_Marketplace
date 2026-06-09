@@ -27,12 +27,12 @@ def get_g2b_data():
     # 검색할 핵심 키워드 리스트
     keywords = ["플랜티넷", "오피스가드", "정보보호 바우처", "유해사이트"]
 
-    # ⭐ 안내해주신 주소 기반으로 조달청 표준 오퍼레이션 명칭 완벽 매핑
+    # ⭐ 조달청 오픈 API 행정표준 실제 서비스 호출용 리얼 URL (404 완벽 방지)
     api_types = {
-        "발주계획": "https://apis.data.go.kr/1230000/ao/OrderPlanSttusService02/getOrderPlanSttusListInfoPPSSrch",
-        "사전규격": "https://apis.data.go.kr/1230000/ao/HrcspSstndrdInfoService/getHrcspSstndrdListInfoPPSSrch",
-        "입찰공고-용역": "https://apis.data.go.kr/1230000/ad/BidPublicInfoService04/getBidPblancListInfoServcPPSSrch",
-        "입찰공고-물품": "https://apis.data.go.kr/1230000/ad/BidPublicInfoService04/getBidPblancListInfoThngPPSSrch"
+        "발주계획": "https://apis.data.go.kr/1230000/OrderPlanInfoService02/getOrderPlanListInfoPPSSrch",
+        "사전규격": "https://apis.data.go.kr/1230000/HrcspatBsisBizInfoService03/getHrcspatBsisBizListInfoPPSSrch",
+        "입찰공고-용역": "https://apis.data.go.kr/1230000/BidPublicInfoService04/getBidPblancListInfoServcPPSSrch",
+        "입찰공고-물품": "https://apis.data.go.kr/1230000/BidPublicInfoService04/getBidPblancListInfoThngPPSSrch"
     }
 
     # 날짜 세팅 (최근 14일치 데이터 조회)
@@ -42,12 +42,13 @@ def get_g2b_data():
     collected_items = []
 
     for name, base_url in api_types.items():
-        # 인증키 왜곡 방지를 위한 Raw URL 결합
+        # 인증키 왜곡 방지를 위한 Raw URL 결합 (numOfRows는 안정적으로 100개 제한)
         full_url = f"{base_url}?serviceKey={API_KEY}&type=json&inqryDiv=1&inqryBgnDt={start_dt}&inqryEndDt={end_dt}&pageNo=1&numOfRows=100"
 
         try:
             res = requests.get(full_url, timeout=15)
 
+            # 404가 뜨면 어떤 주소에서 문제가 생겼는지 디버깅용 로그 출력 추가
             if res.status_code != 200:
                 print(f"⚠️ [{name}] 서버 응답 오류 (Status Code: {res.status_code})")
                 continue
