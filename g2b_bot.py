@@ -76,21 +76,22 @@ def get_g2b_data():
 
                 print(f"📥 [{api['name']}] 데이터 수신 성공! 수신된 총 로우 데이터 수: {len(items)}건")
 
-                # 데이터가 있을 경우 변수 분석을 위해 상위 3개만 샘플로 로그 출력
+                # 변수 검증용 대문자 로그 샘플 출력
                 if items:
-                    print(f"🔍 [{api['name']}] 데이터 필드 분석 샘플 (상위 3건):")
-                    for idx, sample in enumerate(items[:3]):
+                    print(f"🔍 [{api['name']}] 대문자 필드 데이터 분석 샘플 (상위 2건):")
+                    for idx, sample in enumerate(items[:2]):
                         print(
-                            f"   ↳ 샘플[{idx}]: 공고명(bidPblancNm)='{sample.get('bidPblancNm')}', 품명(prcureGoodsNm)='{sample.get('prcureGoodsNm')}', 계획명(orderPlanNm)='{sample.get('orderPlanNm')}'")
+                            f"   ↳ 샘플[{idx}]: BID_PBLANC_NM='{sample.get('BID_PBLANC_NM')}', PRCURE_GOODS_NM='{sample.get('PRCURE_GOODS_NM')}', ORDER_PLAN_NM='{sample.get('ORDER_PLAN_NM')}'")
 
                 for item in items:
-                    # ⭐ 명세서 기반 진짜 변수명 매핑 파이프라인 수립
-                    title = item.get('bidPblancNm') or item.get('prcureGoodsNm') or item.get('orderPlanNm') or item.get(
-                        'bidNtceNm') or ""
-                    link = item.get('bidNtceDtlUrl') or "https://www.g2b.go.kr"
-                    org = item.get('dminsttNm') or item.get('ntceInsttNm') or item.get('orderPlanInsttNm') or "공공기관"
-                    date_val = item.get('ntceDt') or item.get('rgstDt') or item.get(
-                        'orderPlanRgstDt') or datetime.now().strftime('%Y-%m-%d')
+                    # ⭐ 조달청 JSON 실서버 규격인 대문자 필드명으로 전면 교체!
+                    title = item.get('BID_PBLANC_NM') or item.get('PRCURE_GOODS_NM') or item.get(
+                        'ORDER_PLAN_NM') or item.get('BID_NTCE_NM') or ""
+                    link = item.get('BID_NTCE_DTL_URL') or "https://www.g2b.go.kr"
+                    org = item.get('NTCE_INSTT_NM') or item.get('DMINSTT_NM') or item.get(
+                        'ORDER_PLAN_INSTT_NM') or "공공기관"
+                    date_val = item.get('NTCE_DT') or item.get('RGST_DT') or item.get(
+                        'ORDER_PLAN_RGST_DT') or datetime.now().strftime('%Y-%m-%d')
 
                     if not title:
                         continue
@@ -137,6 +138,36 @@ def send_alerts(items):
             requests.post(TEAMS_WEBHOOK, json=payload, timeout=10); print("✅ 팀즈 전송 성공")
         except:
             print("❌ 팀즈 전송 실패")
+
+    # Slack 알림
+    if SLACK_TOKEN and SLACK_CHANNEL:
+        import requests
+        slack_text = f"🏛️ *[{date_str}] 나라장터 검색 결과*\n\n"
+        for item in items:
+            slack_text += f"• *[{item['category']}]* <{item['link']}|{item['title']}> ({item['org']})\n"
+        try:
+            requests.post("https://slack.com/api/chat.postMessage", headers={"Authorization": f"Bearer {SLACK_TOKEN}"},
+                          json={"channel": SLACK_CHANNEL, "text": slack_text}, timeout=10)
+        except:
+            pass
+
+    # 네이버 메일 전송
+    if NAVER_EMAIL and NAVER_PASSWORD:
+        msg = MIMEMultipart()
+        msg['Subject'] = f"[{date_str}] 나라장터 인프라 통합 공고 리포트"
+        msg['From'] = formataddr((str(Header('나라장터 봇', 'utf-8')), NAVER_EMAIL))
+        msg['To'] = NAVER_EMAIL
+        html_content = f"<h2>🏛️ 나라장터 검색 브리핑 ({date_str})</h2><hr><ul>"
+        for item in items:
+            html_content += f"<li><b>[{item['category']}]</b> <a href='{item['link']}'>{item['title']}</a><br>발주: {item['org']} | 날짜: {item['date']}</li><br>"
+        html_content += "</ul>"
+        msg.attach(MIMEText(html_content, 'html'))
+        try:
+            with smtplib.SMTP_SSL("smtp.naver.com", 465) as server:
+                server.login(NAVER_EMAIL, NAVER_PASSWORD)
+                server.sendmail(NAVER_EMAIL, [NAVER_EMAIL], msg.as_string())
+        except:
+            pass
 
 
 if __name__ == "__main__":
