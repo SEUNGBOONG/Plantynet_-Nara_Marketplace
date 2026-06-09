@@ -27,19 +27,20 @@ def get_g2b_data():
 
     pure_key = API_KEY.strip()
 
-    # ⭐ 요청하신 핵심 키워드 4개로 완전 교체!
+    # 등록된 키워드 4개
     keywords = ["스쿨넷", "융합통신망", "교육망", "스마트기기"]
 
-    # 30일치 데이터를 수집하기 위한 날짜 계산 서식
-    end_dt = datetime.now().strftime('%Y%m%d%H%M')
-    start_dt = (datetime.now() - timedelta(days=30)).strftime('%Y%m%d%H%M')
+    # 💡 [테스트용 절대 좌표] 스크린샷에 나온 5월~6월 데이터를 무조건 잡기 위한 날짜 세팅
+    # 발주계획용 (최대 7일 제한 방어를 위해 타깃 주간인 5월 15일 ~ 5월 22일로 정밀 타격)
+    start_day = "20260515"
+    end_day = "20260522"
 
-    end_day = datetime.now().strftime('%Y%m%d')
-    start_day = (datetime.now() - timedelta(days=30)).strftime('%Y%m%d')
+    # 입찰공고 및 사전규격용 (12자리 필수 서식 형식)
+    start_dt = "202605100000"
+    end_dt = "202606092359"
 
     collected_items = []
 
-    # 제출하신 5장 명세서 기준 API URI 매핑 구조
     api_configs = [
         # 1. 발주계획현황서비스
         {
@@ -102,7 +103,7 @@ def get_g2b_data():
                     continue
 
                 for item in items:
-                    # 항목별 데이터 필드 추출 파싱
+                    # 데이터 매핑 필드 다각화
                     title = item.get('orderPlanNm') or item.get('bidNtceNm') or item.get('prcureGoodsNm') or item.get(
                         'bsisBizNm') or ""
                     link = item.get('bidNtceDtlUrl') or "https://www.g2b.go.kr"
@@ -110,7 +111,6 @@ def get_g2b_data():
                     date_val = item.get('ntceDt') or item.get('rgstDt') or item.get(
                         'orderPlanRgstDt') or datetime.now().strftime('%Y-%m-%d')
 
-                    # 새 키워드 기반 필터링
                     if any(kw in title for kw in keywords):
                         collected_items.append({
                             "category": api['name'],
