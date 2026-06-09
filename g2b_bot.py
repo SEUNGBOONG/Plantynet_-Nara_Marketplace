@@ -27,9 +27,9 @@ def get_g2b_data():
     # 검색할 핵심 키워드 리스트
     keywords = ["플랜티넷", "오피스가드", "정보보호 바우처", "유해사이트"]
 
-    # ⭐ 개발계정 상세보기에 적힌 '진짜 최신 End Point 주소'로 전면 교체 (https 필수)
+    # ⭐ 404 에러 해결을 위해 조달청 실서버 표준 오퍼레이션 주소로 완전 재조립
     api_types = {
-        "발주계획": "https://apis.data.go.kr/1230000/ao/OrderPlanSttusService/getOrderPlanListInfoPPSSrch",
+        "발주계획": "https://apis.data.go.kr/1230000/ao/OrderPlanSttusService/getOrderPlanSttusListInfoPPSSrch",
         "사전규격": "https://apis.data.go.kr/1230000/ao/HrcspatBsisBizInfoService/getHrcspatBsisBizListInfoPPSSrch",
         "입찰공고-용역": "https://apis.data.go.kr/1230000/ad/BidPublicInfoService/getBidPblancListInfoServcPPSSrch",
         "입찰공고-물품": "https://apis.data.go.kr/1230000/ad/BidPublicInfoService/getBidPblancListInfoThngPPSSrch"
