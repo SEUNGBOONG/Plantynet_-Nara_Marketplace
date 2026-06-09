@@ -6,8 +6,8 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.header import Header
 from email.utils import formataddr
+import urllib.request
 from urllib.parse import unquote
-import urllib.request  # ⭐ requests 대신 순수 urllib 모듈 사용 (변조 방지)
 
 # 환경 변수 및 GitHub Secrets 로드
 API_KEY = os.environ.get('DATA_GO_KR_API_KEY')
@@ -25,17 +25,16 @@ def get_g2b_data():
         print("❌ 에러: DATA_GO_KR_API_KEY가 설정되지 않았습니다.")
         return []
 
-    # 인증키 자동 변조를 막기 위해 순수 무인코딩 키 상태로 추출
-    decoded_key = unquote(API_KEY)
+    # 깃허브 시크릿 키 공백 제거 처리
+    pure_key = API_KEY.strip()
 
     keywords = ["플랜티넷", "오피스가드", "정보보호 바우처", "유해사이트"]
 
-    # 조달청 공식 오픈 API 실서버 엔드포인트
+    # ⭐ 스크린샷 화면에 명시된 End Point와 승인된 서비스 3개만 정확히 매핑!
     api_types = {
-        "발주계획": "https://apis.data.go.kr/1230000/OrderPlanInfoService02/getOrderPlanListInfoPPSSrch",
-        "사전규격": "https://apis.data.go.kr/1230000/HrcspatBsisBizInfoService03/getHrcspatBsisBizListInfoPPSSrch",
-        "입찰공고-용역": "https://apis.data.go.kr/1230000/BidPublicInfoService04/getBidPblancListInfoServcPPSSrch",
-        "입찰공고-물품": "https://apis.data.go.kr/1230000/BidPublicInfoService04/getBidPblancListInfoThngPPSSrch"
+        "발주계획": "https://apis.data.go.kr/1230000/ao/OrderPlanSttusService/getOrderPlanSttusListInfoPPSSrch",
+        "사전규격": "https://apis.data.go.kr/1230000/ao/HrcspSsstndrdInfoService/getHrcspSsstndrdListInfoPPSSrch",
+        "입찰공고": "https://apis.data.go.kr/1230000/ad/BidPublicInfoService/getBidPblancListInfoPPSSrch"
     }
 
     # 검색 기간 설정 (최근 7일치)
@@ -45,35 +44,23 @@ def get_g2b_data():
     collected_items = []
 
     for name, base_url in api_types.items():
-        # 데이터 유실이나 500 에러 유발을 막기 위해 쌩 문자열 주소 조립 (50개씩 제한)
-        full_url = f"{base_url}?serviceKey={decoded_key}&type=json&inqryDiv=1&inqryBgnDt={start_dt}&inqryEndDt={end_dt}&pageNo=1&numOfRows=50"
+        # 변조 없는 순수 인증키 문자열 결합 방식 사용
+        full_url = f"{base_url}?serviceKey={pure_key}&type=json&inqryDiv=1&inqryBgnDt={start_dt}&inqryEndDt={end_dt}&pageNo=1&numOfRows=50"
 
         try:
-            # 브라우저가 직접 주소창에 치고 들어가는 형태의 Raw Request 객체 생성
             req = urllib.request.Request(
                 full_url,
                 headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
             )
 
             with urllib.request.urlopen(req, timeout=20) as response:
-                status_code = response.getcode()
                 response_body = response.read().decode('utf-8')
 
-                if status_code != 200:
-                    print(f"⚠️ [{name}] 서버 응답 오류 (Status Code: {status_code})")
-                    continue
-
-                # 만약 정부 서버가 내부 에러 메시지(인증 오류 등)를 보냈다면 로그에 찍음
-                if "SERVICE_KEY_IS_NOT_REGISTERED_ERROR" in response_body or "INVALID_REQUEST_PARAMETER_ERROR" in response_body:
-                    print(f"❌ [{name}] 정부 API 키/파라미터 거부 사유: {response_body[:200]}")
-                    continue
-
-                # 정상 JSON 데이터 파싱
                 try:
                     data = json.loads(response_body)
                 except:
-                    # JSON이 아니라 XML 에러 코드가 날아왔을 때 상세 추적용
-                    print(f"⚠️ [{name}] JSON 변환 실패. 리턴된 원본 데이터 일부: {response_body[:300]}")
+                    # 에러 메시지가 올 경우 출력용
+                    print(f"⚠️ [{name}] 응답 데이터 변환 실패: {response_body[:200]}")
                     continue
 
                 body = data.get('response', {}).get('body', {})
@@ -83,6 +70,7 @@ def get_g2b_data():
                     continue
 
                 for item in items:
+                    # 각 API별 제목, 링크, 기관명 매핑 정밀 정제
                     title = item.get('orderPlanNm') or item.get('bsisBizNm') or item.get('bidNtceNm') or ""
                     link = item.get('bidNtceDtlUrl') or "https://www.g2b.go.kr"
                     org = item.get('dminsttNm') or item.get('ntceInsttNm') or "공공기관"
@@ -97,7 +85,7 @@ def get_g2b_data():
                         })
 
         except Exception as e:
-            print(f"⚠️ [{name}] urllib 통신 실패 원인: {e}")
+            print(f"⚠️ [{name}] 호출 중 오류 발생: {e}")
             continue
 
     return collected_items
@@ -132,9 +120,8 @@ def send_alerts(items):
         try:
             requests.post(TEAMS_WEBHOOK, data=json.dumps(payload), headers={'Content-Type': 'application/json'},
                           timeout=10)
-            print("✅ 팀즈 알림 전송 완료")
-        except Exception as e:
-            print(f"❌ 팀즈 전송 에러: {e}")
+        except:
+            pass
 
     # 2. 슬랙(Slack) 알림
     if SLACK_TOKEN and SLACK_CHANNEL:
@@ -142,17 +129,11 @@ def send_alerts(items):
         slack_text = f"🏛️ *[{date_str}] 나라장터 보안 검색 결과*\n\n"
         for item in items:
             slack_text += f"• *[{item['category']}]* <{item['link']}|{item['title']}> ({item['org']})\n"
-
         try:
-            requests.post(
-                "https://slack.com/api/chat.postMessage",
-                headers={"Authorization": f"Bearer {SLACK_TOKEN}"},
-                json={"channel": SLACK_CHANNEL, "text": slack_text},
-                timeout=10
-            )
-            print("✅ 슬랙 알림 전송 완료")
-        except Exception as e:
-            print(f"❌ 슬랙 전송 에러: {e}")
+            requests.post("https://slack.com/api/chat.postMessage", headers={"Authorization": f"Bearer {SLACK_TOKEN}"},
+                          json={"channel": SLACK_CHANNEL, "text": slack_text}, timeout=10)
+        except:
+            pass
 
     # 3. 네이버 메일 전송
     if NAVER_EMAIL and NAVER_PASSWORD:
@@ -160,20 +141,17 @@ def send_alerts(items):
         msg['Subject'] = f"[{date_str}] 나라장터 보안 통합 공고 리포트"
         msg['From'] = formataddr((str(Header('나라장터 봇', 'utf-8')), NAVER_EMAIL))
         msg['To'] = NAVER_EMAIL
-
         html_content = f"<h2>🏛️ 나라장터 검색 브리핑 ({date_str})</h2><hr><ul>"
         for item in items:
             html_content += f"<li><b>[{item['category']}]</b> <a href='{item['link']}'>{item['title']}</a><br>발주: {item['org']} | 날짜: {item['date']}</li><br>"
         html_content += "</ul>"
-
         msg.attach(MIMEText(html_content, 'html'))
         try:
             with smtplib.SMTP_SSL("smtp.naver.com", 465) as server:
                 server.login(NAVER_EMAIL, NAVER_PASSWORD)
                 server.sendmail(NAVER_EMAIL, [NAVER_EMAIL], msg.as_string())
-            print("✅ 네이버 메일 발송 완료")
-        except Exception as e:
-            print(f"❌ 메일 전송 에러: {e}")
+        except:
+            pass
 
 
 if __name__ == "__main__":
