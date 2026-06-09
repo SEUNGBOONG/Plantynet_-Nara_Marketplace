@@ -1,5 +1,4 @@
 import os
-import requests
 import smtplib
 import json
 from datetime import datetime, timedelta
@@ -7,7 +6,8 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.header import Header
 from email.utils import formataddr
-from urllib.parse import unquote  # ⭐ 인증키 강제 디코딩용 모듈 추가
+from urllib.parse import unquote
+import urllib.request  # ⭐ requests 대신 순수 urllib 모듈 사용 (변조 방지)
 
 # 환경 변수 및 GitHub Secrets 로드
 API_KEY = os.environ.get('DATA_GO_KR_API_KEY')
@@ -25,13 +25,12 @@ def get_g2b_data():
         print("❌ 에러: DATA_GO_KR_API_KEY가 설정되지 않았습니다.")
         return []
 
-    # ⭐ 파이썬이 키를 자동 변환하는 것을 막기 위해 강제로 순수 raw 키로 해독
-    # 인코딩/디코딩 키 어떤 걸 넣었어도 다 호환되도록 처리합니다.
+    # 인증키 자동 변조를 막기 위해 순수 무인코딩 키 상태로 추출
     decoded_key = unquote(API_KEY)
 
     keywords = ["플랜티넷", "오피스가드", "정보보호 바우처", "유해사이트"]
 
-    # 조달청 행정표준 실서버 표준 URL
+    # 조달청 공식 오픈 API 실서버 엔드포인트
     api_types = {
         "발주계획": "https://apis.data.go.kr/1230000/OrderPlanInfoService02/getOrderPlanListInfoPPSSrch",
         "사전규격": "https://apis.data.go.kr/1230000/HrcspatBsisBizInfoService03/getHrcspatBsisBizListInfoPPSSrch",
@@ -39,53 +38,66 @@ def get_g2b_data():
         "입찰공고-물품": "https://apis.data.go.kr/1230000/BidPublicInfoService04/getBidPblancListInfoThngPPSSrch"
     }
 
-    # 날짜 세팅 (안정적으로 최근 7일치만 조회)
+    # 검색 기간 설정 (최근 7일치)
     end_dt = datetime.now().strftime('%Y%m%d%H%M')
     start_dt = (datetime.now() - timedelta(days=7)).strftime('%Y%m%d%H%M')
 
     collected_items = []
 
     for name, base_url in api_types.items():
-        # ⭐ 파이썬 requests에 파라미터를 넘기지 않고, 미리 주소를 '문자열 그 자체'로 완성시켜 던짐
-        # 과부하 방지를 위해 numOfRows=50으로 경량화
+        # 데이터 유실이나 500 에러 유발을 막기 위해 쌩 문자열 주소 조립 (50개씩 제한)
         full_url = f"{base_url}?serviceKey={decoded_key}&type=json&inqryDiv=1&inqryBgnDt={start_dt}&inqryEndDt={end_dt}&pageNo=1&numOfRows=50"
 
         try:
-            # 폰으로 주소창에 주소 직접 타이핑해서 들어가는 것과 똑같은 방식으로 요청
-            res = requests.get(full_url, timeout=15)
+            # 브라우저가 직접 주소창에 치고 들어가는 형태의 Raw Request 객체 생성
+            req = urllib.request.Request(
+                full_url,
+                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+            )
 
-            if res.status_code != 200:
-                print(f"⚠️ [{name}] 서버 응답 오류 (Status Code: {res.status_code})")
-                continue
+            with urllib.request.urlopen(req, timeout=20) as response:
+                status_code = response.getcode()
+                response_body = response.read().decode('utf-8')
 
-            # 정부 서버가 간혹 에러를 JSON이 아닌 XML 텍스트로 보낼 때를 대비한 안전 장치
-            try:
-                data = res.json()
-            except:
-                print(f"⚠️ [{name}] 정부 서버가 이상한 데이터를 보냈습니다 (JSON 파싱 실패)")
-                continue
+                if status_code != 200:
+                    print(f"⚠️ [{name}] 서버 응답 오류 (Status Code: {status_code})")
+                    continue
 
-            body = data.get('response', {}).get('body', {})
-            items = body.get('items', [])
+                # 만약 정부 서버가 내부 에러 메시지(인증 오류 등)를 보냈다면 로그에 찍음
+                if "SERVICE_KEY_IS_NOT_REGISTERED_ERROR" in response_body or "INVALID_REQUEST_PARAMETER_ERROR" in response_body:
+                    print(f"❌ [{name}] 정부 API 키/파라미터 거부 사유: {response_body[:200]}")
+                    continue
 
-            if not items:
-                continue
+                # 정상 JSON 데이터 파싱
+                try:
+                    data = json.loads(response_body)
+                except:
+                    # JSON이 아니라 XML 에러 코드가 날아왔을 때 상세 추적용
+                    print(f"⚠️ [{name}] JSON 변환 실패. 리턴된 원본 데이터 일부: {response_body[:300]}")
+                    continue
 
-            for item in items:
-                title = item.get('orderPlanNm') or item.get('bsisBizNm') or item.get('bidNtceNm') or ""
-                link = item.get('bidNtceDtlUrl') or "https://www.g2b.go.kr"
-                org = item.get('dminsttNm') or item.get('ntceInsttNm') or "공공기관"
+                body = data.get('response', {}).get('body', {})
+                items = body.get('items', [])
 
-                if any(kw in title for kw in keywords):
-                    collected_items.append({
-                        "category": name,
-                        "title": title,
-                        "org": org,
-                        "link": link,
-                        "date": item.get('ntceDt') or item.get('rgstDt') or datetime.now().strftime('%Y-%m-%d')
-                    })
+                if not items:
+                    continue
+
+                for item in items:
+                    title = item.get('orderPlanNm') or item.get('bsisBizNm') or item.get('bidNtceNm') or ""
+                    link = item.get('bidNtceDtlUrl') or "https://www.g2b.go.kr"
+                    org = item.get('dminsttNm') or item.get('ntceInsttNm') or "공공기관"
+
+                    if any(kw in title for kw in keywords):
+                        collected_items.append({
+                            "category": name,
+                            "title": title,
+                            "org": org,
+                            "link": link,
+                            "date": item.get('ntceDt') or item.get('rgstDt') or datetime.now().strftime('%Y-%m-%d')
+                        })
+
         except Exception as e:
-            print(f"⚠️ [{name}] 통신 실패: {e}")
+            print(f"⚠️ [{name}] urllib 통신 실패 원인: {e}")
             continue
 
     return collected_items
@@ -104,6 +116,7 @@ def send_alerts(items):
         teams_text += f"**[{item['category']}]** [{item['title']}]({item['link']})<br>└ *발주처: {item['org']} / 일시: {item['date']}*\n\n"
 
     if TEAMS_WEBHOOK:
+        import requests
         payload = {
             "type": "message",
             "attachments": [{
@@ -125,6 +138,7 @@ def send_alerts(items):
 
     # 2. 슬랙(Slack) 알림
     if SLACK_TOKEN and SLACK_CHANNEL:
+        import requests
         slack_text = f"🏛️ *[{date_str}] 나라장터 보안 검색 결과*\n\n"
         for item in items:
             slack_text += f"• *[{item['category']}]* <{item['link']}|{item['title']}> ({item['org']})\n"
