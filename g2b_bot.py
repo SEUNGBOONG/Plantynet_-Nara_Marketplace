@@ -25,26 +25,23 @@ def get_g2b_data():
         print("❌ 에러: DATA_GO_KR_API_KEY가 설정되지 않았습니다.")
         return []
 
-    # 인증키 공백 제거
     pure_key = API_KEY.strip()
 
-    # 우리가 모니터링할 핵심 키워드 리스트
-    keywords = ["플랜티넷", "오피스가드", "정보보호 바우처", "유해사이트"]
+    # ⭐ 요청하신 핵심 키워드 4개로 완전 교체!
+    keywords = ["스쿨넷", "융합통신망", "교육망", "스마트기기"]
 
-    # 검색 기간 설정 (최근 7일치)
+    # 30일치 데이터를 수집하기 위한 날짜 계산 서식
     end_dt = datetime.now().strftime('%Y%m%d%H%M')
-    start_dt = (datetime.now() - timedelta(days=7)).strftime('%Y%m%d%H%M')
+    start_dt = (datetime.now() - timedelta(days=30)).strftime('%Y%m%d%H%M')
 
-    # 단기 조회를 위한 단순 일자 서식 (발주계획용 YYYYMMDD)
     end_day = datetime.now().strftime('%Y%m%d')
-    start_day = (datetime.now() - timedelta(days=7)).strftime('%Y%m%d')
+    start_day = (datetime.now() - timedelta(days=30)).strftime('%Y%m%d')
 
     collected_items = []
 
-    # 스크린샷 가이드라인 기반 3대 서비스 명세 정의
-    # 가이드라인에 명시된 필수 오퍼레이션과 도메인을 1대1로 정확히 조립했습니다.
+    # 제출하신 5장 명세서 기준 API URI 매핑 구조
     api_configs = [
-        # 1. 발주계획현황서비스 (image_518ff9.png 기준)
+        # 1. 발주계획현황서비스
         {
             "name": "발주계획-물품",
             "url": "https://apis.data.go.kr/1230000/ao/OrderPlanSttusService/getOrderPlanSttusListThng",
@@ -55,7 +52,7 @@ def get_g2b_data():
             "url": "https://apis.data.go.kr/1230000/ao/OrderPlanSttusService/getOrderPlanSttusListServc",
             "params": f"&insttInqryBgnDt={start_day}&insttInqryEndDt={end_day}"
         },
-        # 2. 입찰공고정보서비스 (image_518f7e.png 기준)
+        # 2. 입찰공고정보서비스
         {
             "name": "입찰공고-용역",
             "url": "https://apis.data.go.kr/1230000/ad/BidPublicInfoService/getBidPblancListInfoServcPPSSrch",
@@ -66,7 +63,7 @@ def get_g2b_data():
             "url": "https://apis.data.go.kr/1230000/ad/BidPublicInfoService/getBidPblancListInfoThngPPSSrch",
             "params": f"&inqryDiv=1&inqryBgnDt={start_dt}&inqryEndDt={end_dt}"
         },
-        # 3. 사전규격 (image_518bfe.png 기준)
+        # 3. 사전규격
         {
             "name": "사전규격-물품",
             "url": "https://apis.data.go.kr/1230000/ao/HrcspSsstndrdInfoService/getPublicPrcureThngInfoThngPPSSrch",
@@ -80,8 +77,7 @@ def get_g2b_data():
     ]
 
     for api in api_configs:
-        # 각 서비스 규격에 맞는 명세 기반 전체 주소 바인딩
-        full_url = f"{api['url']}?serviceKey={pure_key}&type=json&pageNo=1&numOfRows=50{api['params']}"
+        full_url = f"{api['url']}?serviceKey={pure_key}&type=json&pageNo=1&numOfRows=100{api['params']}"
 
         try:
             req = urllib.request.Request(
@@ -95,28 +91,26 @@ def get_g2b_data():
                 try:
                     data = json.loads(response_body)
                 except:
-                    # XML 에러 메시지나 보안 차단 텍스트가 반환되었을 때 우회하기 위함
-                    print(f"⚠️ [{api['name']}] 데이터 해석 불가 (JSON 형식이 아님). 첫 100자: {response_body[:100]}")
                     continue
 
                 body = data.get('response', {}).get('body', {})
                 items = body.get('items', [])
 
-                # 데이터가 리스트 형태가 아닌 딕셔너리로 1건만 감싸서 오는 케이스 방어 코드
                 if isinstance(items, dict):
                     items = [items]
                 elif not items:
                     continue
 
                 for item in items:
-                    # 가이드 명세 기반의 통합 변수 추출 파이프라인
-                    title = item.get('orderPlanNm') or item.get('bidNtceNm') or item.get('prcureGoodsNm') or ""
+                    # 항목별 데이터 필드 추출 파싱
+                    title = item.get('orderPlanNm') or item.get('bidNtceNm') or item.get('prcureGoodsNm') or item.get(
+                        'bsisBizNm') or ""
                     link = item.get('bidNtceDtlUrl') or "https://www.g2b.go.kr"
-                    org = item.get('dminsttNm') or item.get('ntceInsttNm') or item.get('public기관') or "공공기관"
+                    org = item.get('dminsttNm') or item.get('ntceInsttNm') or "공공기관"
                     date_val = item.get('ntceDt') or item.get('rgstDt') or item.get(
                         'orderPlanRgstDt') or datetime.now().strftime('%Y-%m-%d')
 
-                    # 키워드가 제목에 포함되어 있는지 검사
+                    # 새 키워드 기반 필터링
                     if any(kw in title for kw in keywords):
                         collected_items.append({
                             "category": api['name'],
@@ -126,11 +120,7 @@ def get_g2b_data():
                             "date": date_val
                         })
 
-        except urllib.error.HTTPError as e:
-            print(f"❌ [{api['name']}] 호출 실패 (HTTP Error {e.code}) - 주소 혹은 허가 요건을 재확인하세요.")
-            continue
         except Exception as e:
-            print(f"⚠️ [{api['name']}] 기타 통신 예외 발생: {e}")
             continue
 
     return collected_items
@@ -144,8 +134,8 @@ def send_alerts(items):
 
     date_str = datetime.now().strftime('%m/%d')
 
-    # 1. MS Teams 알림 메커니즘
-    teams_text = f"### 🏛️ [{date_str}] 나라장터 보안 검색 실시간 브리핑\n\n"
+    # 1. 팀즈 알림
+    teams_text = f"### 🏛️ [{date_str}] 나라장터 인프라 검색 실시간 브리핑\n\n"
     for item in items:
         teams_text += f"**[{item['category']}]** [{item['title']}]({item['link']})<br>└ *발주처: {item['org']} / 일시: {item['date']}*\n\n"
 
@@ -169,10 +159,10 @@ def send_alerts(items):
         except:
             pass
 
-    # 2. Slack 알림 메커니즘
+    # 2. 슬랙 알림
     if SLACK_TOKEN and SLACK_CHANNEL:
         import requests
-        slack_text = f"🏛️ *[{date_str}] 나라장터 보안 검색 결과*\n\n"
+        slack_text = f"🏛️ *[{date_str}] 나라장터 검색 결과*\n\n"
         for item in items:
             slack_text += f"• *[{item['category']}]* <{item['link']}|{item['title']}> ({item['org']})\n"
         try:
@@ -181,10 +171,10 @@ def send_alerts(items):
         except:
             pass
 
-    # 3. 네이버 이메일 알림 메커니즘
+    # 3. 네이버 메일 전송
     if NAVER_EMAIL and NAVER_PASSWORD:
         msg = MIMEMultipart()
-        msg['Subject'] = f"[{date_str}] 나라장터 보안 통합 공고 리포트"
+        msg['Subject'] = f"[{date_str}] 나라장터 인프라 통합 공고 리포트"
         msg['From'] = formataddr((str(Header('나라장터 봇', 'utf-8')), NAVER_EMAIL))
         msg['To'] = NAVER_EMAIL
         html_content = f"<h2>🏛️ 나라장터 검색 브리핑 ({date_str})</h2><hr><ul>"
