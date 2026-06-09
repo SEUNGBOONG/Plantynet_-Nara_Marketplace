@@ -7,6 +7,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.header import Header
 from email.utils import formataddr
+from urllib.parse import unquote  # ⭐ 인증키 강제 디코딩용 모듈 추가
 
 # 환경 변수 및 GitHub Secrets 로드
 API_KEY = os.environ.get('DATA_GO_KR_API_KEY')
@@ -24,10 +25,13 @@ def get_g2b_data():
         print("❌ 에러: DATA_GO_KR_API_KEY가 설정되지 않았습니다.")
         return []
 
-    # 검색할 핵심 키워드 리스트
+    # ⭐ 파이썬이 키를 자동 변환하는 것을 막기 위해 강제로 순수 raw 키로 해독
+    # 인코딩/디코딩 키 어떤 걸 넣었어도 다 호환되도록 처리합니다.
+    decoded_key = unquote(API_KEY)
+
     keywords = ["플랜티넷", "오피스가드", "정보보호 바우처", "유해사이트"]
 
-    # ⭐ 조달청 오픈 API 행정표준 실제 서비스 호출용 리얼 URL (404 완벽 방지)
+    # 조달청 행정표준 실서버 표준 URL
     api_types = {
         "발주계획": "https://apis.data.go.kr/1230000/OrderPlanInfoService02/getOrderPlanListInfoPPSSrch",
         "사전규격": "https://apis.data.go.kr/1230000/HrcspatBsisBizInfoService03/getHrcspatBsisBizListInfoPPSSrch",
@@ -35,32 +39,38 @@ def get_g2b_data():
         "입찰공고-물품": "https://apis.data.go.kr/1230000/BidPublicInfoService04/getBidPblancListInfoThngPPSSrch"
     }
 
-    # 날짜 세팅 (최근 14일치 데이터 조회)
+    # 날짜 세팅 (안정적으로 최근 7일치만 조회)
     end_dt = datetime.now().strftime('%Y%m%d%H%M')
-    start_dt = (datetime.now() - timedelta(days=14)).strftime('%Y%m%d%H%M')
+    start_dt = (datetime.now() - timedelta(days=7)).strftime('%Y%m%d%H%M')
 
     collected_items = []
 
     for name, base_url in api_types.items():
-        # 인증키 왜곡 방지를 위한 Raw URL 결합 (numOfRows는 안정적으로 100개 제한)
-        full_url = f"{base_url}?serviceKey={API_KEY}&type=json&inqryDiv=1&inqryBgnDt={start_dt}&inqryEndDt={end_dt}&pageNo=1&numOfRows=100"
+        # ⭐ 파이썬 requests에 파라미터를 넘기지 않고, 미리 주소를 '문자열 그 자체'로 완성시켜 던짐
+        # 과부하 방지를 위해 numOfRows=50으로 경량화
+        full_url = f"{base_url}?serviceKey={decoded_key}&type=json&inqryDiv=1&inqryBgnDt={start_dt}&inqryEndDt={end_dt}&pageNo=1&numOfRows=50"
 
         try:
+            # 폰으로 주소창에 주소 직접 타이핑해서 들어가는 것과 똑같은 방식으로 요청
             res = requests.get(full_url, timeout=15)
 
-            # 404가 뜨면 어떤 주소에서 문제가 생겼는지 디버깅용 로그 출력 추가
             if res.status_code != 200:
                 print(f"⚠️ [{name}] 서버 응답 오류 (Status Code: {res.status_code})")
                 continue
 
-            data = res.json()
+            # 정부 서버가 간혹 에러를 JSON이 아닌 XML 텍스트로 보낼 때를 대비한 안전 장치
+            try:
+                data = res.json()
+            except:
+                print(f"⚠️ [{name}] 정부 서버가 이상한 데이터를 보냈습니다 (JSON 파싱 실패)")
+                continue
+
             body = data.get('response', {}).get('body', {})
             items = body.get('items', [])
 
             if not items:
                 continue
 
-            # 키워드 필터링
             for item in items:
                 title = item.get('orderPlanNm') or item.get('bsisBizNm') or item.get('bidNtceNm') or ""
                 link = item.get('bidNtceDtlUrl') or "https://www.g2b.go.kr"
@@ -75,7 +85,7 @@ def get_g2b_data():
                         "date": item.get('ntceDt') or item.get('rgstDt') or datetime.now().strftime('%Y-%m-%d')
                     })
         except Exception as e:
-            print(f"⚠️ [{name}] 데이터 수집 실패 원인: {e}")
+            print(f"⚠️ [{name}] 통신 실패: {e}")
             continue
 
     return collected_items
