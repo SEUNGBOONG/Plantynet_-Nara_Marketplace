@@ -25,27 +25,63 @@ def get_g2b_data():
         print("❌ 에러: DATA_GO_KR_API_KEY가 설정되지 않았습니다.")
         return []
 
-    # 깃허브 시크릿 키 공백 제거 처리
+    # 인증키 공백 제거
     pure_key = API_KEY.strip()
 
+    # 우리가 모니터링할 핵심 키워드 리스트
     keywords = ["플랜티넷", "오피스가드", "정보보호 바우처", "유해사이트"]
-
-    # ⭐ 스크린샷 화면에 명시된 End Point와 승인된 서비스 3개만 정확히 매핑!
-    api_types = {
-        "발주계획": "https://apis.data.go.kr/1230000/ao/OrderPlanSttusService/getOrderPlanSttusListInfoPPSSrch",
-        "사전규격": "https://apis.data.go.kr/1230000/ao/HrcspSsstndrdInfoService/getHrcspSsstndrdListInfoPPSSrch",
-        "입찰공고": "https://apis.data.go.kr/1230000/ad/BidPublicInfoService/getBidPblancListInfoPPSSrch"
-    }
 
     # 검색 기간 설정 (최근 7일치)
     end_dt = datetime.now().strftime('%Y%m%d%H%M')
     start_dt = (datetime.now() - timedelta(days=7)).strftime('%Y%m%d%H%M')
 
+    # 단기 조회를 위한 단순 일자 서식 (발주계획용 YYYYMMDD)
+    end_day = datetime.now().strftime('%Y%m%d')
+    start_day = (datetime.now() - timedelta(days=7)).strftime('%Y%m%d')
+
     collected_items = []
 
-    for name, base_url in api_types.items():
-        # 변조 없는 순수 인증키 문자열 결합 방식 사용
-        full_url = f"{base_url}?serviceKey={pure_key}&type=json&inqryDiv=1&inqryBgnDt={start_dt}&inqryEndDt={end_dt}&pageNo=1&numOfRows=50"
+    # 스크린샷 가이드라인 기반 3대 서비스 명세 정의
+    # 가이드라인에 명시된 필수 오퍼레이션과 도메인을 1대1로 정확히 조립했습니다.
+    api_configs = [
+        # 1. 발주계획현황서비스 (image_518ff9.png 기준)
+        {
+            "name": "발주계획-물품",
+            "url": "https://apis.data.go.kr/1230000/ao/OrderPlanSttusService/getOrderPlanSttusListThng",
+            "params": f"&insttInqryBgnDt={start_day}&insttInqryEndDt={end_day}"
+        },
+        {
+            "name": "발주계획-용역",
+            "url": "https://apis.data.go.kr/1230000/ao/OrderPlanSttusService/getOrderPlanSttusListServc",
+            "params": f"&insttInqryBgnDt={start_day}&insttInqryEndDt={end_day}"
+        },
+        # 2. 입찰공고정보서비스 (image_518f7e.png 기준)
+        {
+            "name": "입찰공고-용역",
+            "url": "https://apis.data.go.kr/1230000/ad/BidPublicInfoService/getBidPblancListInfoServcPPSSrch",
+            "params": f"&inqryDiv=1&inqryBgnDt={start_dt}&inqryEndDt={end_dt}"
+        },
+        {
+            "name": "입찰공고-물품",
+            "url": "https://apis.data.go.kr/1230000/ad/BidPublicInfoService/getBidPblancListInfoThngPPSSrch",
+            "params": f"&inqryDiv=1&inqryBgnDt={start_dt}&inqryEndDt={end_dt}"
+        },
+        # 3. 사전규격 (image_518bfe.png 기준)
+        {
+            "name": "사전규격-물품",
+            "url": "https://apis.data.go.kr/1230000/ao/HrcspSsstndrdInfoService/getPublicPrcureThngInfoThngPPSSrch",
+            "params": f"&inqryDiv=1&inqryBgnDt={start_dt}&inqryEndDt={end_dt}"
+        },
+        {
+            "name": "사전규격-용역",
+            "url": "https://apis.data.go.kr/1230000/ao/HrcspSsstndrdInfoService/getPublicPrcureThngInfoServcPPSSrch",
+            "params": f"&inqryDiv=1&inqryBgnDt={start_dt}&inqryEndDt={end_dt}"
+        }
+    ]
+
+    for api in api_configs:
+        # 각 서비스 규격에 맞는 명세 기반 전체 주소 바인딩
+        full_url = f"{api['url']}?serviceKey={pure_key}&type=json&pageNo=1&numOfRows=50{api['params']}"
 
         try:
             req = urllib.request.Request(
@@ -53,39 +89,48 @@ def get_g2b_data():
                 headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
             )
 
-            with urllib.request.urlopen(req, timeout=20) as response:
+            with urllib.request.urlopen(req, timeout=25) as response:
                 response_body = response.read().decode('utf-8')
 
                 try:
                     data = json.loads(response_body)
                 except:
-                    # 에러 메시지가 올 경우 출력용
-                    print(f"⚠️ [{name}] 응답 데이터 변환 실패: {response_body[:200]}")
+                    # XML 에러 메시지나 보안 차단 텍스트가 반환되었을 때 우회하기 위함
+                    print(f"⚠️ [{api['name']}] 데이터 해석 불가 (JSON 형식이 아님). 첫 100자: {response_body[:100]}")
                     continue
 
                 body = data.get('response', {}).get('body', {})
                 items = body.get('items', [])
 
-                if not items:
+                # 데이터가 리스트 형태가 아닌 딕셔너리로 1건만 감싸서 오는 케이스 방어 코드
+                if isinstance(items, dict):
+                    items = [items]
+                elif not items:
                     continue
 
                 for item in items:
-                    # 각 API별 제목, 링크, 기관명 매핑 정밀 정제
-                    title = item.get('orderPlanNm') or item.get('bsisBizNm') or item.get('bidNtceNm') or ""
+                    # 가이드 명세 기반의 통합 변수 추출 파이프라인
+                    title = item.get('orderPlanNm') or item.get('bidNtceNm') or item.get('prcureGoodsNm') or ""
                     link = item.get('bidNtceDtlUrl') or "https://www.g2b.go.kr"
-                    org = item.get('dminsttNm') or item.get('ntceInsttNm') or "공공기관"
+                    org = item.get('dminsttNm') or item.get('ntceInsttNm') or item.get('public기관') or "공공기관"
+                    date_val = item.get('ntceDt') or item.get('rgstDt') or item.get(
+                        'orderPlanRgstDt') or datetime.now().strftime('%Y-%m-%d')
 
+                    # 키워드가 제목에 포함되어 있는지 검사
                     if any(kw in title for kw in keywords):
                         collected_items.append({
-                            "category": name,
+                            "category": api['name'],
                             "title": title,
                             "org": org,
                             "link": link,
-                            "date": item.get('ntceDt') or item.get('rgstDt') or datetime.now().strftime('%Y-%m-%d')
+                            "date": date_val
                         })
 
+        except urllib.error.HTTPError as e:
+            print(f"❌ [{api['name']}] 호출 실패 (HTTP Error {e.code}) - 주소 혹은 허가 요건을 재확인하세요.")
+            continue
         except Exception as e:
-            print(f"⚠️ [{name}] 호출 중 오류 발생: {e}")
+            print(f"⚠️ [{api['name']}] 기타 통신 예외 발생: {e}")
             continue
 
     return collected_items
@@ -93,12 +138,13 @@ def get_g2b_data():
 
 def send_alerts(items):
     if not items:
+        print("검색 완료: 신규 0건 발견")
         print("검색된 신규 공고가 없어 알림 발송을 생략합니다.")
         return
 
     date_str = datetime.now().strftime('%m/%d')
 
-    # 1. 팀즈(Teams) 알림
+    # 1. MS Teams 알림 메커니즘
     teams_text = f"### 🏛️ [{date_str}] 나라장터 보안 검색 실시간 브리핑\n\n"
     for item in items:
         teams_text += f"**[{item['category']}]** [{item['title']}]({item['link']})<br>└ *발주처: {item['org']} / 일시: {item['date']}*\n\n"
@@ -123,7 +169,7 @@ def send_alerts(items):
         except:
             pass
 
-    # 2. 슬랙(Slack) 알림
+    # 2. Slack 알림 메커니즘
     if SLACK_TOKEN and SLACK_CHANNEL:
         import requests
         slack_text = f"🏛️ *[{date_str}] 나라장터 보안 검색 결과*\n\n"
@@ -135,7 +181,7 @@ def send_alerts(items):
         except:
             pass
 
-    # 3. 네이버 메일 전송
+    # 3. 네이버 이메일 알림 메커니즘
     if NAVER_EMAIL and NAVER_PASSWORD:
         msg = MIMEMultipart()
         msg['Subject'] = f"[{date_str}] 나라장터 보안 통합 공고 리포트"
@@ -156,5 +202,6 @@ def send_alerts(items):
 
 if __name__ == "__main__":
     found_items = get_g2b_data()
-    print(f"검색 완료: 신규 {len(found_items)}건 발견")
+    if found_items:
+        print(f"검색 완료: 신규 {len(found_items)}건 발견")
     send_alerts(found_items)
