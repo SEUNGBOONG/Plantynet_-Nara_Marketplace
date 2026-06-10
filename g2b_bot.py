@@ -1,7 +1,7 @@
 import os
 import smtplib
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.header import Header
@@ -20,8 +20,14 @@ SLACK_CHANNEL = os.environ.get('SLACK_CHANNEL')
 HISTORY_FILE = "last_g2b_data.txt"
 
 
+def get_current_kst():
+    """해외 깃허브 서버에서도 항상 정확한 한국 시간(KST)을 반환합니다."""
+    return datetime.now(timezone(timedelta(hours=9)))
+
+
 def get_g2b_data():
-    print("나라장터 발주계획(오직 발주만!) 상시 감시 로봇 구동 중...")
+    kst_now = get_current_kst()
+    print(f"나라장터 발주계획 정밀 분석 로봇 구동 중... (현재 한국 시간: {kst_now.strftime('%Y-%m-%d %H:%M')})")
 
     if not API_KEY:
         print("❌ 에러: DATA_GO_KR_API_KEY가 설정되지 않았습니다.")
@@ -30,7 +36,7 @@ def get_g2b_data():
     pure_key = API_KEY.strip()
     keywords = ["스쿨넷", "융합통신망", "교육망", "스마트기기"]
 
-    # ❌ 입찰공고/사전규격 전부 제거!! ⭕ 오직 발주계획 서비스만 타격
+    # ❌ 입찰공고/사전규격 차단 ⭕ 오직 발주계획 데이터만 타격
     api_types = [
         {"name": "발주계획(용역)",
          "url": "https://apis.data.go.kr/1230000/ao/OrderPlanSttusService/getOrderPlanSttusListServc"},
@@ -38,12 +44,11 @@ def get_g2b_data():
          "url": "https://apis.data.go.kr/1230000/ao/OrderPlanSttusService/getOrderPlanSttusListThng"}
     ]
 
-    # 조달청 서버의 7일 검색 락(Lock)을 풀기 위해 최근 28일치를 4개 구간으로 쪼갬
+    # 조달청 7일 조회 제한 우회를 위해 최근 28일치를 4개 구간으로 쪼개서 검색
     date_ranges = []
-    today = datetime.now()
     for i in range(4):
-        end_day = (today - timedelta(days=i * 7)).strftime('%Y%m%d')
-        start_day = (today - timedelta(days=(i + 1) * 7 - 1)).strftime('%Y%m%d')
+        end_day = (kst_now - timedelta(days=i * 7)).strftime('%Y%m%d')
+        start_day = (kst_now - timedelta(days=(i + 1) * 7 - 1)).strftime('%Y%m%d')
         date_ranges.append((start_day, end_day))
 
     collected_dict = {}
@@ -69,16 +74,14 @@ def get_g2b_data():
                         continue
 
                     for item in items:
-                        # 발주계획 전용 실서버 변수명 파이프라인 수립
                         title = item.get('orderPlanNm') or ""
                         org = item.get('orderPlanInsttNm') or item.get('dminsttNm') or "공공기관"
-                        date_val = item.get('orderPlanRgstDt') or datetime.now().strftime('%Y-%m-%d')
+                        date_val = item.get('orderPlanRgstDt') or kst_now.strftime('%Y-%m-%d')
                         budget = item.get('asignBdgtAmt') or "0"
 
                         if date_val:
                             date_val = date_val.split()[0]
 
-                        # 키워드 매칭 및 중복 필터링
                         if title and any(kw in title for kw in keywords):
                             unique_key = f"{org}_{title}".strip()
 
@@ -122,13 +125,11 @@ def load_and_compare(current_items):
             new_count += 1
             print(f"✨ [새로운 발주계획 추가 발견] -> {item['title']}")
 
-    # 현재 목록을 다음 세션을 위해 기억 파일에 저장
     try:
         with open(HISTORY_FILE, "w", encoding="utf-8") as f:
             for item in current_items:
                 f.write(f"{item['org']}_{item['title']}\n")
 
-        # 깃허브 액션 환경에 파일 동기화 명령
         subprocess.run(["git", "config", "--global", "user.name", "G2B-Bot"], capture_output=True)
         subprocess.run(["git", "config", "--global", "user.email", "bot@g2b.com"], capture_output=True)
         subprocess.run(["git", "add", HISTORY_FILE], capture_output=True)
@@ -141,7 +142,9 @@ def load_and_compare(current_items):
 
 
 def send_alerts(items, new_count):
-    date_str = datetime.now().strftime('%m/%d %H시')
+    kst_now = get_current_kst()
+    date_str = kst_now.strftime('%m/%d %H시')
+
     if not items:
         print("검색 완료: 조건에 일치하는 한 달 치 발주 계획이 조달청 서버에 없습니다.")
         return
@@ -149,35 +152,48 @@ def send_alerts(items, new_count):
     new_alert_header = f"🚨 [★이전 대비 신규 발주계획 {new_count}건 추가됨!★]" if new_count > 0 else "✅ 이전 대비 새로 추가된 발주 없음"
     print(f"\n====================================\n최종 발송 리포트: 총 {len(items)}건 브리핑 진행 ({new_alert_header})")
 
-    # 1. MS Teams 브리핑 전송
-    teams_text = f"### 🏛️ 나라장터 발주계획 종합 현황판 ({date_str} 기준)\n"
-    teams_text += f"**{new_alert_header}**\n"
-    teams_text += f"*※ 최근 한 달간 등록된 4대 핵심 키워드 발주계획 전체 현황판입니다.*\n\n"
+    # # 1. MS Teams 브리핑 전송 (잠시 보류)
+    # teams_text = f"### 🏛️ 나라장터 발주계획 종합 현황판 ({date_str} 기준)\n"
+    # teams_text += f"**{new_alert_header}**\n"
+    # teams_text += f"*※ 최근 한 달간 등록된 4대 핵심 키워드 발주계획 전체 현황판입니다.*\n\n"
+    #
+    # for idx, item in enumerate(items, 1):
+    #     badge = "🔴 **[★신규 추가됨★]** " if item['is_new'] else ""
+    #     teams_text += f"{idx}. {badge}**[{item['category']}] {item['title']}**\n"
+    #     teams_text += f"└ *발주기관: {item['org']} / 등록일: {item['date']} / 예산: {item['budget']}*\n\n"
+    #
+    # if TEAMS_WEBHOOK:
+    #     import requests
+    #     payload = {
+    #         "type": "message",
+    #         "attachments": [{
+    #             "contentType": "application/vnd.microsoft.card.adaptive",
+    #             "content": {
+    #                 "type": "AdaptiveCard",
+    #                 "body": [{"type": "TextBlock", "text": teams_text, "wrap": True}],
+    #                 "$schema": "http://adaptivecards.io/schemas/adaptive-card.json", "version": "1.4"
+    #             }
+    #         }]
+    #     }
+    #     try: requests.post(TEAMS_WEBHOOK, json=payload, timeout=10)
+    #     except: pass
 
-    for idx, item in enumerate(items, 1):
-        badge = "🔴 **[★신규 추가됨★]** " if item['is_new'] else ""
-        teams_text += f"{idx}. {badge}**[{item['category']}] {item['title']}**\n"
-        teams_text += f"└ *발주기관: {item['org']} / 등록일: {item['date']} / 예산: {item['budget']}*\n\n"
-
-    if TEAMS_WEBHOOK:
+    # 2. Slack 브리핑 전송
+    if SLACK_TOKEN and SLACK_CHANNEL:
         import requests
-        payload = {
-            "type": "message",
-            "attachments": [{
-                "contentType": "application/vnd.microsoft.card.adaptive",
-                "content": {
-                    "type": "AdaptiveCard",
-                    "body": [{"type": "TextBlock", "text": teams_text, "wrap": True}],
-                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json", "version": "1.4"
-                }
-            }]
-        }
+        slack_text = f"🏛️ *나라장터 핵심 발주계획 종합 현황판 ({date_str} 기준)*\n"
+        slack_text += f"*{new_alert_header}*\n\n"
+        for idx, item in enumerate(items, 1):
+            badge = "🔴 *[★신규추가★]* " if item['is_new'] else ""
+            slack_text += f"{idx}. {badge}*[{item['category']}]* {item['title']}\n   • 발주기관: {item['org']} | 등록일: {item['date']} | 예산: {item['budget']}\n"
         try:
-            requests.post(TEAMS_WEBHOOK, json=payload, timeout=10)
+            requests.post("https://slack.com/api/chat.postMessage",
+                          headers={"Authorization": f"Bearer {SLACK_TOKEN}"},
+                          json={"channel": SLACK_CHANNEL, "text": slack_text}, timeout=10)
         except:
             pass
 
-    # 2. 네이버 이메일 현황판 전송
+    # 3. 네이버 이메일 현황판 전송
     if NAVER_EMAIL and NAVER_PASSWORD:
         msg = MIMEMultipart()
         subject_title = f"🚨 [신규발주 {new_count}건] 나라장터 발주계획 리포트" if new_count > 0 else f"[현황판] 나라장터 발주계획 종합 리포트 ({date_str})"
