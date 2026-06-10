@@ -21,7 +21,7 @@ HISTORY_FILE = "last_g2b_data.txt"
 
 
 def get_g2b_data():
-    print("나라장터 발주계획 상시 감시 및 변경 추적 로봇 구동 중...")
+    print("나라장터 발주계획(오직 발주만!) 상시 감시 로봇 구동 중...")
 
     if not API_KEY:
         print("❌ 에러: DATA_GO_KR_API_KEY가 설정되지 않았습니다.")
@@ -30,6 +30,7 @@ def get_g2b_data():
     pure_key = API_KEY.strip()
     keywords = ["스쿨넷", "융합통신망", "교육망", "스마트기기"]
 
+    # ❌ 입찰공고/사전규격 전부 제거!! ⭕ 오직 발주계획 서비스만 타격
     api_types = [
         {"name": "발주계획(용역)",
          "url": "https://apis.data.go.kr/1230000/ao/OrderPlanSttusService/getOrderPlanSttusListServc"},
@@ -37,7 +38,7 @@ def get_g2b_data():
          "url": "https://apis.data.go.kr/1230000/ao/OrderPlanSttusService/getOrderPlanSttusListThng"}
     ]
 
-    # 조달청 7일 조회 제한 우회를 위해 최근 28일을 4개 구간으로 분할
+    # 조달청 서버의 7일 검색 락(Lock)을 풀기 위해 최근 28일치를 4개 구간으로 쪼갬
     date_ranges = []
     today = datetime.now()
     for i in range(4):
@@ -68,6 +69,7 @@ def get_g2b_data():
                         continue
 
                     for item in items:
+                        # 발주계획 전용 실서버 변수명 파이프라인 수립
                         title = item.get('orderPlanNm') or ""
                         org = item.get('orderPlanInsttNm') or item.get('dminsttNm') or "공공기관"
                         date_val = item.get('orderPlanRgstDt') or datetime.now().strftime('%Y-%m-%d')
@@ -76,8 +78,8 @@ def get_g2b_data():
                         if date_val:
                             date_val = date_val.split()[0]
 
+                        # 키워드 매칭 및 중복 필터링
                         if title and any(kw in title for kw in keywords):
-                            # 기관명과 제목 조합으로 고유 키 생성
                             unique_key = f"{org}_{title}".strip()
 
                             try:
@@ -92,7 +94,7 @@ def get_g2b_data():
                                 "org": org,
                                 "date": date_val,
                                 "budget": budget_str,
-                                "is_new": False  # 기본값은 신규 아님
+                                "is_new": False
                             }
             except:
                 continue
@@ -103,48 +105,37 @@ def get_g2b_data():
 
 
 def load_and_compare(current_items):
-    """이전 실행 데이터와 비교하여 신규 추가 항목을 마킹하고 기록을 업데이트합니다."""
+    """3시간 전(이전 실행) 데이터와 비교하여 새로 추가된 발주건이 있으면 딱지를 붙입니다."""
     past_keys = set()
-
-    # 1. 과거 기록 읽어오기
     if os.path.exists(HISTORY_FILE):
         try:
             with open(HISTORY_FILE, "r", encoding="utf-8") as f:
                 past_keys = set(line.strip() for line in f.readlines() if line.strip())
-            print(f"📂 기억 보관소 로드 완료 (이전 등록 데이터 수: {len(past_keys)}건)")
-        except Exception as e:
-            print(f"⚠️ 기억 보관소 로드 실패: {e}")
-    else:
-        print("ℹ️ 기존 기억 보관소 파일이 없습니다. 첫 실행으로 인식합니다.")
+        except:
+            pass
 
-    # 2. 신규 여부 비교 체크
     new_count = 0
     for item in current_items:
         current_key = f"{item['org']}_{item['title']}".strip()
         if past_keys and (current_key not in past_keys):
             item['is_new'] = True
             new_count += 1
-            print(f"✨ [신규 발주 발견] -> {item['title']} ({item['org']})")
+            print(f"✨ [새로운 발주계획 추가 발견] -> {item['title']}")
 
-    # 첫 실행인 경우 전부 신규라 알림이 도배되는 것을 막기 위해 가드 가동
-    if not past_keys:
-        print("💡 첫 구동이므로 전체 목록을 기준점으로 보관합니다. (다음 시간부터 신규 마킹 활성화)")
-
-    # 3. 최신 데이터로 기억 보관소 파일 갱신
+    # 현재 목록을 다음 세션을 위해 기억 파일에 저장
     try:
         with open(HISTORY_FILE, "w", encoding="utf-8") as f:
             for item in current_items:
                 f.write(f"{item['org']}_{item['title']}\n")
 
-        # GitHub Actions 내부 저장소에 파일 상태 자동 커밋/푸시 실행
+        # 깃허브 액션 환경에 파일 동기화 명령
         subprocess.run(["git", "config", "--global", "user.name", "G2B-Bot"], capture_output=True)
         subprocess.run(["git", "config", "--global", "user.email", "bot@g2b.com"], capture_output=True)
         subprocess.run(["git", "add", HISTORY_FILE], capture_output=True)
-        subprocess.run(["git", "commit", "-m", "🤖 [🤖 시스템] 발주 기록 보관소 실시간 갱신"], capture_output=True)
+        subprocess.run(["git", "commit", "-m", "🤖 [시스템] 발주 기록 보관소 동기화"], capture_output=True)
         subprocess.run(["git", "push"], capture_output=True)
-        print("💾 최신 발주 리스트를 저장소 기억 보관소에 동기화 완료했습니다.")
-    except Exception as e:
-        print(f"⚠️ 저장소 자동 갱신 실패 (권한 제한 등): {e}")
+    except:
+        pass
 
     return current_items, new_count
 
@@ -152,20 +143,19 @@ def load_and_compare(current_items):
 def send_alerts(items, new_count):
     date_str = datetime.now().strftime('%m/%d %H시')
     if not items:
-        print("검색 완료: 조건에 맞는 한 달 치 발주 계획이 존재하지 않습니다.")
+        print("검색 완료: 조건에 일치하는 한 달 치 발주 계획이 조달청 서버에 없습니다.")
         return
 
-    # 신규 건수가 있을 때 헤더 문구 다이내믹 변경
-    new_alert_header = f"🚨 [★1시간 전 대비 신규 {new_count}건 추가됨!★]" if new_count > 0 else "✅ 1시간 전 대비 변동사항 없음"
-    print(f"\n📢 [현황판 브리핑 시작] {new_alert_header} (총 {len(items)}건 송신)")
+    new_alert_header = f"🚨 [★이전 대비 신규 발주계획 {new_count}건 추가됨!★]" if new_count > 0 else "✅ 이전 대비 새로 추가된 발주 없음"
+    print(f"\n====================================\n최종 발송 리포트: 총 {len(items)}건 브리핑 진행 ({new_alert_header})")
 
-    # 1. MS Teams 브리핑 양식
+    # 1. MS Teams 브리핑 전송
     teams_text = f"### 🏛️ 나라장터 발주계획 종합 현황판 ({date_str} 기준)\n"
     teams_text += f"**{new_alert_header}**\n"
-    teams_text += f"*※ 최근 4주일간 등록된 4대 핵심 키워드 전체 리스트입니다.*\n\n<hr>\n\n"
+    teams_text += f"*※ 최근 한 달간 등록된 4대 핵심 키워드 발주계획 전체 현황판입니다.*\n\n"
 
     for idx, item in enumerate(items, 1):
-        badge = "🔴 **[★신규 추가공고★]** " if item['is_new'] else ""
+        badge = "🔴 **[★신규 추가됨★]** " if item['is_new'] else ""
         teams_text += f"{idx}. {badge}**[{item['category']}] {item['title']}**\n"
         teams_text += f"└ *발주기관: {item['org']} / 등록일: {item['date']} / 예산: {item['budget']}*\n\n"
 
@@ -187,17 +177,16 @@ def send_alerts(items, new_count):
         except:
             pass
 
-    # 2. 네이버 이메일 현황판 양식
+    # 2. 네이버 이메일 현황판 전송
     if NAVER_EMAIL and NAVER_PASSWORD:
         msg = MIMEMultipart()
-        subject_title = f"🚨 [신규발주 {new_count}건!!] 나라장터 핵심 발주계획 리포트" if new_count > 0 else f"[현황판] 나라장터 발주계획 종합 리포트 ({date_str})"
+        subject_title = f"🚨 [신규발주 {new_count}건] 나라장터 발주계획 리포트" if new_count > 0 else f"[현황판] 나라장터 발주계획 종합 리포트 ({date_str})"
         msg['Subject'] = subject_title
         msg['From'] = formataddr((str(Header('발주계획 감시봇', 'utf-8')), NAVER_EMAIL))
         msg['To'] = NAVER_EMAIL
 
         html_content = f"<h2>🏛️ 나라장터 핵심 발주계획 종합 현황판 ({date_str})</h2>"
-        html_content += f"<p style='font-size:14px; color:#d9534f;'><b>{new_alert_header}</b></p>"
-        html_content += "<p style='color:#666;'>최근 4주일 동안 나라장터에 등록된 4대 핵심 키워드 정밀 분석 결과입니다.</p><hr><br>"
+        html_content += f"<p style='font-size:14px; color:#d9534f;'><b>{new_alert_header}</b></p><hr><br>"
         html_content += "<table border='1' style='border-collapse:collapse; width:100%; text-align:left; font-size:13px;'>"
         html_content += "<tr style='background-color:#f2f2f2; height:35px;'><th>번호</th><th>구분</th><th>발주사업명</th><th>수요기관</th><th>등록일자</th><th>배정예산</th></tr>"
 
@@ -214,7 +203,7 @@ def send_alerts(items, new_count):
                             f"<td style='padding:10px;'>{item['date']}</td>" \
                             f"<td style='padding:10px; color:blue; font-weight:bold;'>{item['budget']}</td>" \
                             f"</tr>"
-        html_content += "</table><br><br>※ 본 브리핑은 1시간 간격 업데이트 추적 시스템에 의해 발송됩니다."
+        html_content += "</table>"
 
         msg.attach(MIMEText(html_content, 'html'))
         try:
@@ -228,5 +217,4 @@ def send_alerts(items, new_count):
 if __name__ == "__main__":
     raw_items = get_g2b_data()
     compared_items, new_detected = load_and_compare(raw_items)
-    print(f"\n====================================\n최근 한 달 데이터 정밀 매칭 완료: 총 {len(compared_items)}건 데이터 정렬")
     send_alerts(compared_items, new_detected)
