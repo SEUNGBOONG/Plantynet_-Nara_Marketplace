@@ -12,6 +12,10 @@ import urllib.error
 # 환경 변수 및 GitHub Secrets 로드
 API_KEY = os.environ.get('DATA_GO_KR_API_KEY')
 TEAMS_WEBHOOK = os.environ.get('TEAMS_WEBHOOK_URL')
+NAVER_EMAIL = os.environ.get('NAVER_EMAIL')
+NAVER_PASSWORD = os.environ.get('NAVER_PASSWORD')
+SLACK_TOKEN = os.environ.get('SLACK_TOKEN')
+SLACK_CHANNEL = os.environ.get('SLACK_CHANNEL')
 
 
 def get_g2b_data():
@@ -22,18 +26,31 @@ def get_g2b_data():
         return []
 
     pure_key = API_KEY.strip()
+
+    # 설정하신 핵심 모니터링 키워드 4개
     keywords = ["스쿨넷", "융합통신망", "교육망", "스마트기기"]
 
-    # 5월~6월 테스트 날짜
-    start_dt = "202605100000"
-    end_dt = "202606092359"
+    # 💡 실전용 자동 스케줄링 세팅: 언제 돌려도 항상 '최근 14일치'를 실시간 추적합니다.
+    end_dt = datetime.now().strftime('%Y%m%d%H%M')
+    start_dt = (datetime.now() - timedelta(days=14)).strftime('%Y%m%d%H%M')
+
+    end_day = datetime.now().strftime('%Y%m%d')
+    start_day = (datetime.now() - timedelta(days=14)).strftime('%Y%m%d')
 
     api_configs = [
+        # 1. 발주계획현황서비스 (용역)
+        {
+            "name": "발주계획-용역",
+            "url": "https://apis.data.go.kr/1230000/ao/OrderPlanSttusService/getOrderPlanSttusListServc",
+            "params": f"&insttInqryBgnDt={start_day}&insttInqryEndDt={end_day}"
+        },
+        # 2. 입찰공고정보서비스 (용역)
         {
             "name": "입찰공고-용역",
             "url": "https://apis.data.go.kr/1230000/ad/BidPublicInfoService/getBidPblancListInfoServcPPSSrch",
             "params": f"&inqryDiv=1&inqryBgnDt={start_dt}&inqryEndDt={end_dt}"
         },
+        # 3. 사전규격 (용역)
         {
             "name": "사전규격-용역",
             "url": "https://apis.data.go.kr/1230000/ao/HrcspSsstndrdInfoService/getPublicPrcureThngInfoServcPPSSrch",
@@ -44,8 +61,7 @@ def get_g2b_data():
     collected_items = []
 
     for api in api_configs:
-        full_url = f"{api['url']}?serviceKey={pure_key}&type=json&pageNo=1&numOfRows=50{api['params']}"
-        print(f"\n📡 [{api['name']}] 호출 시도 중...")
+        full_url = f"{api['url']}?serviceKey={pure_key}&type=json&pageNo=1&numOfRows=100{api['params']}"
 
         try:
             req = urllib.request.Request(
@@ -62,41 +78,110 @@ def get_g2b_data():
 
                 if isinstance(items, dict):
                     items = [items]
+                elif not items:
+                    continue
 
-                print(f"📥 [{api['name']}] 데이터 수신 성공 (수신 데이터 수: {len(items)}건)")
-
-                if items and len(items) > 0:
-                    sample_item = items[0]
-                    print(f"🚨 [구조 해부] 조달청 서버가 보낸 실제 JSON Key 목록 전체:")
-                    # 넘어온 데이터의 모든 Key 구조를 강제 출력
-                    print(f"   ↳ {list(sample_item.keys())}")
-
-                    # 샘플 데이터의 원본을 200자만 강제 출력하여 눈으로 확인
-                    print(f"   ↳ 데이터 실제 값 일부: {str(sample_item)[:200]}")
-
-                # 방어막 매핑 - 대소문자 무관하게 걸릴 수 있도록 다중 가드 배치
                 for item in items:
-                    title = (
-                            item.get('bidPblancNm') or item.get('BID_PBLANC_NM') or
-                            item.get('prcureGoodsNm') or item.get('PRCURE_GOODS_NM') or
-                            item.get('bidNtceNm') or item.get('BID_NTCE_NM') or ""
-                    )
-                    link = item.get('bidNtceDtlUrl') or item.get('BID_NTCE_DTL_URL') or "https://www.g2b.go.kr"
-                    org = item.get('ntceInsttNm') or item.get('NTCE_INSTT_NM') or "공공기관"
-                    date_val = item.get('ntceDt') or item.get('NTCE_DT') or datetime.now().strftime('%Y-%m-%d')
+                    # ⭐ 로그 분석을 통해 완벽하게 매핑한 진짜 실서버 변수명 파이프라인!
+                    title = item.get('bidNtceNm') or item.get('prdctClsfcNoNm') or item.get('orderPlanNm') or ""
 
-                    if any(kw in str(title) for kw in keywords):
-                        print(f"🎯 키워드 적중! -> {title}")
+                    # 링크 추출 (사전규격은 링크를 주지 않으므로 기본 나라장터 주소로 헷지)
+                    link = item.get('bidNtceDtlUrl') or item.get('bidNtceUrl') or "https://www.g2b.go.kr"
+
+                    # 기관명 추출 (실수요기관 우선)
+                    org = item.get('rlDminsttNm') or item.get('ntceInsttNm') or item.get('orderInsttNm') or "공공기관"
+
+                    # 날짜 추출
+                    date_val = item.get('bidNtceDt') or item.get('rcptDt') or item.get('rgstDt') or ""
+                    if date_val:
+                        date_val = date_val.split()[0]  # 날짜 뒤에 붙은 시간 지우고 깔끔하게 YYYY-MM-DD 화
+                    else:
+                        date_val = datetime.now().strftime('%Y-%m-%d')
+
+                    if not title:
+                        continue
+
+                    # 4대 키워드 필터링 검사
+                    if any(kw in title for kw in keywords):
+                        print(f"🎯 실시간 키워드 적중! -> [{api['name']}] {title} ({org})")
                         collected_items.append({
-                            "category": api['name'], "title": title, "org": org, "link": link, "date": date_val
+                            "category": api['name'],
+                            "title": title,
+                            "org": org,
+                            "link": link,
+                            "date": date_val
                         })
 
         except Exception as e:
-            print(f"🚨 [{api['name']}] 처리 중 시스템 오류: {e}")
+            continue
 
     return collected_items
 
 
+def send_alerts(items):
+    if not items:
+        print("검색 완료: 신규 0건 발견 (최근 14일 내 키워드 일치 공고 없음)")
+        return
+
+    date_str = datetime.now().strftime('%m/%d')
+    print(f"\n📢 [알림 가동] 총 {len(items)}건의 매칭 공고 알림을 전송합니다.")
+
+    # 1. MS Teams 알림
+    teams_text = f"### 🏛️ [{date_str}] 나라장터 인프라 실시간 감시 브리핑\n\n"
+    for item in items:
+        teams_text += f"**[{item['category']}]** [{item['title']}]({item['link']})\n└ *발주처: {item['org']} / 등록일: {item['date']}*\n\n"
+
+    if TEAMS_WEBHOOK:
+        import requests
+        payload = {
+            "type": "message",
+            "attachments": [{
+                "contentType": "application/vnd.microsoft.card.adaptive",
+                "content": {
+                    "type": "AdaptiveCard",
+                    "body": [{"type": "TextBlock", "text": teams_text, "wrap": True}],
+                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                    "version": "1.4"
+                }
+            }]
+        }
+        try:
+            requests.post(TEAMS_WEBHOOK, json=payload, timeout=10)
+        except:
+            pass
+
+    # 2. Slack 알림
+    if SLACK_TOKEN and SLACK_CHANNEL:
+        import requests
+        slack_text = f"🏛️ *[{date_str}] 나라장터 핵심 감시 결과*\n\n"
+        for item in items:
+            slack_text += f"• *[{item['category']}]* <{item['link']}|{item['title']}> ({item['org']}) - {item['date']}\n"
+        try:
+            requests.post("https://slack.com/api/chat.postMessage", headers={"Authorization": f"Bearer {SLACK_TOKEN}"},
+                          json={"channel": SLACK_CHANNEL, "text": slack_text}, timeout=10)
+        except:
+            pass
+
+    # 3. 네이버 이메일 전송
+    if NAVER_EMAIL and NAVER_PASSWORD:
+        msg = MIMEMultipart()
+        msg['Subject'] = f"[{date_str}] 나라장터 매칭 공고 알림 리포트"
+        msg['From'] = formataddr((str(Header('나라장터 감시봇', 'utf-8')), NAVER_EMAIL))
+        msg['To'] = NAVER_EMAIL
+        html_content = f"<h2>🏛️ 나라장터 인프라 매칭 공고 ({date_str})</h2><hr><ul>"
+        for item in items:
+            html_content += f"<li><b>[{item['category']}]</b> <a href='{item['link']}'>{item['title']}</a><br>발주기관: {item['org']} | 등록일자: {item['date']}</li><br>"
+        html_content += "</ul>"
+        msg.attach(MIMEText(html_content, 'html'))
+        try:
+            with smtplib.SMTP_SSL("smtp.naver.com", 465) as server:
+                server.login(NAVER_EMAIL, NAVER_PASSWORD)
+                server.sendmail(NAVER_EMAIL, [NAVER_EMAIL], msg.as_string())
+        except:
+            pass
+
+
 if __name__ == "__main__":
     found_items = get_g2b_data()
-    print(f"\n====================================\n검색 완료: 최종 {len(found_items)}건 검출됨")
+    print(f"\n====================================\n검색 완료: 최종 {len(found_items)}건 매칭 성공")
+    send_alerts(found_items)
