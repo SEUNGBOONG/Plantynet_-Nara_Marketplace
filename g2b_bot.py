@@ -34,69 +34,87 @@ def get_g2b_data():
         return []
 
     pure_key = API_KEY.strip()
+    # 인코딩된 키와 디코딩된 키의 변수 꼬임을 방지하기 위해 언인코딩 처리(필요시 조달청 대응)
+    import urllib.parse
+    unquoted_key = urllib.parse.unquote(pure_key)
+
     keywords = ["스쿨넷", "융합통신망", "교육망", "스마트기기"]
 
-    # ⭕ 화면 속 순수 나라장터 데이터를 100% 긁어오는 진짜 본진 API 주소
+    # 진짜 본진 API 주소
     api_types = [
         {"name": "나라장터 본진 발주계획",
          "url": "https://apis.data.go.kr/1230000/Bps_OrderPlanInfoService/getBpsOrderPlanInfoList"}
     ]
 
-    # ⭐ [500 에러 해결의 핵심] 본진 API는 날짜에 반드시 하이픈(-)이 포함된 YYYY-MM-DD 규격을 요구합니다!
     end_day = kst_now.strftime('%Y-%m-%d')
     start_day = (kst_now - timedelta(days=31)).strftime('%Y-%m-%d')
 
     collected_dict = {}
 
     for api in api_types:
-        # URL에 들어가는 날짜 파라미터 형식을 하이픈 형태로 안전하게 전달합니다.
-        full_url = f"{api['url']}?serviceKey={pure_key}&type=json&pageNo=1&numOfRows=999&bgnDt={start_day}&endDt={end_day}"
+        # ⭐ [500 에러 전면 우회] 주소창(URL)에서 serviceKey를 완전 삭제 처리합니다!
+        full_url = f"{api['url']}?type=json&pageNo=1&numOfRows=999&bgnDt={start_day}&endDt={end_day}"
 
         try:
+            # ⭐ 대신 Headers 가방 안에 인증키를 숨겨서 전달하는 조달청 표준 보안 방식을 적용합니다.
             req = urllib.request.Request(
                 full_url,
-                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+                headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+                    'accept': 'application/json',
+                    'Authorization': unquoted_key  # 헤더 인증 주입
+                }
             )
-            with urllib.request.urlopen(req, timeout=20) as response:
-                response_body = response.read().decode('utf-8')
-                data = json.loads(response_body)
-                body = data.get('response', {}).get('body', {})
-                items = body.get('items', [])
 
-                if isinstance(items, dict):
-                    items = [items]
-                elif not items:
-                    continue
+            # 만약 헤더 인증 거부 시를 대비한 백업 2차 타격 (URL 인코딩 유지 방식)
+            try:
+                with urllib.request.urlopen(req, timeout=20) as response:
+                    response_body = response.read().decode('utf-8')
+            except:
+                # 백업: 원래 방식으로 가되 키를 바르게 다시 인코딩해서 재시도
+                backup_url = f"{api['url']}?serviceKey={pure_key}&type=json&pageNo=1&numOfRows=999&bgnDt={start_day}&endDt={end_day}"
+                req_backup = urllib.request.Request(backup_url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req_backup, timeout=20) as response:
+                    response_body = response.read().decode('utf-8')
 
-                for item in items:
-                    title = item.get('prcmntPlanNm') or ""
-                    org = item.get('orderInsttNm') or item.get('coopsInsttNm') or "공공기관"
-                    date_val = item.get('rgstDt') or kst_now.strftime('%Y-%m-%d')
-                    budget = item.get('asignBdgtAmt') or "0"
+            data = json.loads(response_body)
+            body = data.get('response', {}).get('body', {})
+            items = body.get('items', [])
 
-                    if date_val:
-                        date_val = date_val.split()[0]
+            if isinstance(items, dict):
+                items = [items]
+            elif not items:
+                continue
 
-                    # 키워드 매칭 검사
-                    if title and any(kw in title for kw in keywords):
-                        unique_key = f"{org}_{title}".strip()
+            for item in items:
+                title = item.get('prcmntPlanNm') or ""
+                org = item.get('orderInsttNm') or item.get('coopsInsttNm') or "공공기관"
+                date_val = item.get('rgstDt') or kst_now.strftime('%Y-%m-%d')
+                budget = item.get('asignBdgtAmt') or "0"
 
-                        try:
-                            amt = int(budget)
-                            budget_str = f"{amt:,}원" if amt < 100000000 else f"{amt / 100000000:.1f}억원"
-                        except:
-                            budget_str = "미정"
+                if date_val:
+                    date_val = date_val.split()[0]
 
-                        collected_dict[unique_key] = {
-                            "category": api['name'],
-                            "title": title,
-                            "org": org,
-                            "date": date_val,
-                            "budget": budget_str,
-                            "is_new": False
-                        }
+                # 키워드 매칭 검사
+                if title and any(kw in title for kw in keywords):
+                    unique_key = f"{org}_{title}".strip()
+
+                    try:
+                        amt = int(budget)
+                        budget_str = f"{amt:,}원" if amt < 100000000 else f"{amt / 100000000:.1f}억원"
+                    except:
+                        budget_str = "미정"
+
+                    collected_dict[unique_key] = {
+                        "category": api['name'],
+                        "title": title,
+                        "org": org,
+                        "date": date_val,
+                        "budget": budget_str,
+                        "is_new": False
+                    }
         except Exception as e:
-            print(f"⚠️ 본진 데이터 수집 중 에러 발생 (대시 규격 확인 필요): {e}")
+            print(f"⚠️ 본진 데이터 수집 중 에러 발생: {e}")
             continue
 
     final_items = list(collected_dict.values())
