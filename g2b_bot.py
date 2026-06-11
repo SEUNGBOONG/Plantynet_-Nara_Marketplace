@@ -140,18 +140,19 @@ def get_date_ranges(kst_now):
     order_end = end_dt + timedelta(days=ORDER_MONTHS_AHEAD * 31)
     order_end = order_end.replace(day=1)
 
+    # 🎯 [교정] PPSSrch 오퍼레이션은 분단위(HHmm)를 붙이면 06 포맷에러가 발생하므로 8자리(YYYYMMDD)로 보냅니다.
     return {
         "orderBgnYm": order_start.strftime("%Y%m"),
         "orderEndYm": order_end.strftime("%Y%m"),
-        "inqryBgnDt": start_dt.strftime("%Y%m%d0000"),
-        "inqryEndDt": end_dt.strftime("%Y%m%d2359"),
+        "insttInptBgnDt": start_dt.strftime("%Y%m%d"),  # 변경 적용
+        "insttInptEndDt": end_dt.strftime("%Y%m%d"),  # 변경 적용
     }
 
 
 def matches_keyword(item, keyword):
     keyword_lower = keyword.lower()
     search_fields = [
-        item.get("bizNm") or "",
+        item.get("prcmntPlanPjctNm") or item.get("bizNm") or "",  # PPSSrch의 실제 사업명 키는 prcmntPlanPjctNm 입니다.
         item.get("usgCntnts") or "",
         item.get("prdctClsfcNoNm") or "",
         item.get("specCntnts") or "",
@@ -177,34 +178,38 @@ def get_g2b_data():
     errors = []
 
     for category, endpoint in ORDER_PLAN_ENDPOINTS:
-        for keyword in keywords:
-            params = {
-                "type": "json",
-                "numOfRows": 100,
-                "bizNm": keyword,
-                **date_ranges,
-            }
+        # 🎯 [교정] 조달청 서버의 한글 검색 깨짐 버그를 우회하기 위해 bizNm은 비우고
+        # 최근 40일 데이터를 통째로 받아온 뒤 하단의 matches_keyword로 필터링합니다.
+        params = {
+            "type": "json",
+            "numOfRows": 100,
+            "bizNm": "",
+            **date_ranges,
+        }
 
-            try:
-                items = fetch_all_pages(endpoint, service_key, params)
-                print(f"  [{category}] '{keyword}' -> {len(items)}건")
-            except (urllib.error.URLError, RuntimeError, json.JSONDecodeError) as exc:
-                message = f"[{category}] '{keyword}' 조회 실패: {exc}"
-                print(f"  {message}")
-                errors.append(message)
-                continue
+        try:
+            items = fetch_all_pages(endpoint, service_key, params)
+        except (urllib.error.URLError, RuntimeError, json.JSONDecodeError) as exc:
+            message = f"[{category}] 조회 실패: {exc}"
+            print(f"  {message}")
+            errors.append(message)
+            continue
 
-            for item in items:
+        matched_count = 0
+        for item in items:
+            # 4대 키워드 순회 검사
+            for keyword in keywords:
                 if not matches_keyword(item, keyword):
                     continue
 
-                title = item.get("bizNm") or ""
+                # PPSSrch 규격에 맞는 정확한 필드 추출 (사업명: prcmntPlanPjctNm, 예산액: totPrcmntAmt)
+                title = item.get("prcmntPlanPjctNm") or item.get("bizNm") or ""
                 org = item.get("orderInsttNm") or "공공기관"
-                date_val = item.get("nticeDt") or kst_now.strftime("%Y-%m-%d")
+                date_val = item.get("insttInptDt") or kst_now.strftime("%Y-%m-%d")
                 if len(date_val) >= 10:
                     date_val = date_val[:10]
 
-                order_plan_no = item.get("orderPlanUntyNo") or ""
+                order_plan_no = item.get("prcmntPlanInfrntNo") or item.get("orderPlanUntyNo") or ""
                 unique_key = f"{order_plan_no or org}_{title}".strip()
 
                 collected[unique_key] = {
@@ -212,11 +217,15 @@ def get_g2b_data():
                     "title": title,
                     "org": org,
                     "date": date_val,
-                    "budget": format_budget(item.get("sumOrderAmt")),
+                    "budget": format_budget(item.get("totPrcmntAmt") or item.get("sumOrderAmt")),
                     "link": build_order_plan_link(order_plan_no),
                     "keyword": keyword,
                     "is_new": False,
                 }
+                matched_count += 1
+                break  # 하나의 키워드라도 매칭되면 중복 추가 방지
+
+        print(f"  [{category}] 전체 수집 후 내역 매칭 완료 -> 필터링 결과 총 {matched_count}건 추출")
 
     final_items = list(collected.values())
     final_items.sort(key=lambda x: x["date"], reverse=True)
