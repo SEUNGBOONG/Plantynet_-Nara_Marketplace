@@ -27,95 +27,90 @@ def get_current_kst():
 
 def get_g2b_data():
     kst_now = get_current_kst()
-    print(f"나라장터 본진 발주계획 정밀 분석 로봇 구동 중... (현재 한국 시간: {kst_now.strftime('%Y-%m-%d %H:%M')})")
+    print(f"나라장터 발주계획 정밀 분석 로봇 구동 중... (현재 한국 시간: {kst_now.strftime('%Y-%m-%d %H:%M')})")
 
     if not API_KEY:
         print("❌ 에러: DATA_GO_KR_API_KEY가 설정되지 않았습니다.")
         return []
 
     pure_key = API_KEY.strip()
-    # 인코딩된 키와 디코딩된 키의 변수 꼬임을 방지하기 위해 언인코딩 처리(필요시 조달청 대응)
-    import urllib.parse
-    unquoted_key = urllib.parse.unquote(pure_key)
-
     keywords = ["스쿨넷", "융합통신망", "교육망", "스마트기기"]
 
-    # 진짜 본진 API 주소
+    # ⭕ [원래 안정적인 주소로 복귀] 500 에러가 나지 않던 최초의 API 서비스 구역입니다.
     api_types = [
-        {"name": "나라장터 본진 발주계획",
-         "url": "https://apis.data.go.kr/1230000/Bps_OrderPlanInfoService/getBpsOrderPlanInfoList"}
+        {
+            "name": "발주계획(용역)",
+            "url": "https://apis.data.go.kr/1230000/ao/OrderPlanSttusService/getOrderPlanSttusListServc",
+            "start_p": "insttInqryBgnDt", "end_p": "insttInqryEndDt"
+        },
+        {
+            "name": "발주계획(물품)",
+            "url": "https://apis.data.go.kr/1230000/ao/OrderPlanSttusService/getOrderPlanSttusListThng",
+            "start_p": "inqryBgnDt", "end_p": "inqryEndDt"
+        }
     ]
 
-    end_day = kst_now.strftime('%Y-%m-%d')
-    start_day = (kst_now - timedelta(days=31)).strftime('%Y-%m-%d')
+    # 💡 500 에러 없이 통과하기 위해, 7일씩 쪼개서 총 120일(약 4달치)의 과거 영역까지 깊숙하게 탐색합니다.
+    date_ranges = []
+    for i in range(18):
+        end_day = (kst_now - timedelta(days=i * 7)).strftime('%Y%m%d')
+        start_day = (kst_now - timedelta(days=(i + 1) * 7 - 1)).strftime('%Y%m%d')
+        date_ranges.append((start_day, end_day))
 
     collected_dict = {}
 
     for api in api_types:
-        # ⭐ [500 에러 전면 우회] 주소창(URL)에서 serviceKey를 완전 삭제 처리합니다!
-        full_url = f"{api['url']}?type=json&pageNo=1&numOfRows=999&bgnDt={start_day}&endDt={end_day}"
+        for start_day, end_day in date_ranges:
+            # numOfRows는 안정적인 통신을 위해 100건으로 고정
+            full_url = f"{api['url']}?serviceKey={pure_key}&type=json&pageNo=1&numOfRows=100&{api['start_p']}={start_day}&{api['end_p']}={end_day}"
 
-        try:
-            # ⭐ 대신 Headers 가방 안에 인증키를 숨겨서 전달하는 조달청 표준 보안 방식을 적용합니다.
-            req = urllib.request.Request(
-                full_url,
-                headers={
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-                    'accept': 'application/json',
-                    'Authorization': unquoted_key  # 헤더 인증 주입
-                }
-            )
-
-            # 만약 헤더 인증 거부 시를 대비한 백업 2차 타격 (URL 인코딩 유지 방식)
             try:
-                with urllib.request.urlopen(req, timeout=20) as response:
+                req = urllib.request.Request(
+                    full_url,
+                    headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+                )
+                with urllib.request.urlopen(req, timeout=15) as response:
                     response_body = response.read().decode('utf-8')
+                    data = json.loads(response_body)
+                    body = data.get('response', {}).get('body', {})
+                    items = body.get('items', [])
+
+                    if isinstance(items, dict):
+                        items = [items]
+                    elif not items:
+                        continue
+
+                    for item in items:
+                        # 변수명 예외처리 통합 수집
+                        title = item.get('orderPlanNm') or item.get('prcmntPlanNm') or ""
+                        org = item.get('orderPlanInsttNm') or item.get('dminsttNm') or item.get(
+                            'orderInsttNm') or "공공기관"
+                        date_val = item.get('orderPlanRgstDt') or item.get('rgstDt') or kst_now.strftime('%Y-%m-%d')
+                        budget = item.get('asignBdgtAmt') or "0"
+
+                        if date_val:
+                            date_val = date_val.split()[0]
+
+                        # 키워드 검사
+                        if title and any(kw in title for kw in keywords):
+                            unique_key = f"{org}_{title}".strip()
+
+                            try:
+                                amt = int(budget)
+                                budget_str = f"{amt:,}원" if amt < 100000000 else f"{amt / 100000000:.1f}억원"
+                            except:
+                                budget_str = "미정"
+
+                            collected_dict[unique_key] = {
+                                "category": api['name'],
+                                "title": title,
+                                "org": org,
+                                "date": date_val,
+                                "budget": budget_str,
+                                "is_new": False
+                            }
             except:
-                # 백업: 원래 방식으로 가되 키를 바르게 다시 인코딩해서 재시도
-                backup_url = f"{api['url']}?serviceKey={pure_key}&type=json&pageNo=1&numOfRows=999&bgnDt={start_day}&endDt={end_day}"
-                req_backup = urllib.request.Request(backup_url, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req_backup, timeout=20) as response:
-                    response_body = response.read().decode('utf-8')
-
-            data = json.loads(response_body)
-            body = data.get('response', {}).get('body', {})
-            items = body.get('items', [])
-
-            if isinstance(items, dict):
-                items = [items]
-            elif not items:
                 continue
-
-            for item in items:
-                title = item.get('prcmntPlanNm') or ""
-                org = item.get('orderInsttNm') or item.get('coopsInsttNm') or "공공기관"
-                date_val = item.get('rgstDt') or kst_now.strftime('%Y-%m-%d')
-                budget = item.get('asignBdgtAmt') or "0"
-
-                if date_val:
-                    date_val = date_val.split()[0]
-
-                # 키워드 매칭 검사
-                if title and any(kw in title for kw in keywords):
-                    unique_key = f"{org}_{title}".strip()
-
-                    try:
-                        amt = int(budget)
-                        budget_str = f"{amt:,}원" if amt < 100000000 else f"{amt / 100000000:.1f}억원"
-                    except:
-                        budget_str = "미정"
-
-                    collected_dict[unique_key] = {
-                        "category": api['name'],
-                        "title": title,
-                        "org": org,
-                        "date": date_val,
-                        "budget": budget_str,
-                        "is_new": False
-                    }
-        except Exception as e:
-            print(f"⚠️ 본진 데이터 수집 중 에러 발생: {e}")
-            continue
 
     final_items = list(collected_dict.values())
     final_items.sort(key=lambda x: x['date'], reverse=True)
@@ -160,7 +155,7 @@ def send_alerts(items, new_count):
     date_str = kst_now.strftime('%m/%d %H시')
 
     if not items:
-        print("검색 완료: 조건에 일치하는 발주 계획이 조달청 본진 API 서버에 존재하지 않습니다.")
+        print("검색 완료: 조건에 일치하는 발주 계획이 조달청 서버에 존재하지 않거나 아직 동기화 전입니다.")
         return
 
     new_alert_header = f"🚨 [★이전 보고 대비 신규 발주계획 {new_count}건 추가됨!★]" if new_count > 0 else "✅ 이전 보고 대비 새로 추가된 발주 없음"
