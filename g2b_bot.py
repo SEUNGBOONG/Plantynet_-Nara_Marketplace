@@ -39,7 +39,7 @@ def get_g2b_data():
     decoded_key = urllib.parse.unquote(pure_key)
     encoded_key = urllib.parse.quote(decoded_key)
 
-    # 🎯 [핵심 교체] 질문자님이 인증받으신 '입찰공고정보서비스' 검색조건 전용 주소 셋팅
+    # 입찰공고정보서비스 검색조건 전용 주소 셋팅
     api_types = [
         {
             "name": "입찰공고(용역)",
@@ -51,19 +51,18 @@ def get_g2b_data():
         }
     ]
 
-    # 화면에 찍힌 공고 게시일시 기준 범위 설정 (안전하게 최근 40일치 조회)
-    end_day = kst_now.strftime('%Y%m%d%H%M')
-    start_day = (kst_now - timedelta(days=40)).strftime('%Y%m%d0000')
+    # 🎯 [핵심 보정] 시/분(HHMM)을 완전히 제거하고 조달청 규격에 맞춰 딱 8자리(YYYYMMDD)로 매칭합니다.
+    end_day = kst_now.strftime('%Y%m%d')
+    start_day = (kst_now - timedelta(days=45)).strftime('%Y%m%d')  # 5월 초부터 싹 훑기
 
-    keywords = ["스쿨넷", "융합통신망", "교육망", "스마트기기", "스마트 패드", "디지털 교과서"]
+    keywords = ["스쿨넷", "융합통신망", "교육망", "스마트기기"]
     collected_dict = {}
 
     for api in api_types:
         for kw in keywords:
             encoded_kw = urllib.parse.quote(kw)
 
-            # 입찰공고서비스 PPSSrch 규격 파라미터 적용
-            # inpraQrPtBgnDt: 공고게시일시 시작 / inpraQrPtEndDt: 공고게시일시 종료 / bidNtceNm: 입찰공고명
+            # 🎯 파라미터 날짜 형식을 8자리 규격(YYYYMMDD)으로 완전히 통일하여 호출합니다.
             full_url = f"{api['url']}?serviceKey={encoded_key}&type=json&pageNo=1&numOfRows=100&inpraQrPtBgnDt={start_day}&inpraQrPtEndDt={end_day}&bidNtceNm={encoded_kw}"
 
             try:
@@ -87,7 +86,6 @@ def get_g2b_data():
                         continue
 
                     for item in items:
-                        # 입찰공고서비스 태그명 맵핑 (bidNtceNm: 공고명, dminsttNm: 수요기관)
                         title = item.get('bidNtceNm') or ""
                         org = item.get('dminsttNm') or item.get('ntceInsttNm') or "공공기관"
                         date_val = item.get('bidNtceDt') or kst_now.strftime('%Y-%m-%d')
@@ -106,7 +104,6 @@ def get_g2b_data():
                             except:
                                 budget_str = "미정"
 
-                            # 나라장터 상세 화면 바로가기 링크 생성
                             g2b_link = f"https://www.g2b.go.kr:8443/ep/invitation/publish/bidInfoDtl.do?bidNo={url_code}&bidChgNo=00" if url_code else "https://www.g2b.go.kr"
 
                             collected_dict[unique_key] = {
