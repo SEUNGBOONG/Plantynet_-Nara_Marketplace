@@ -36,20 +36,20 @@ def get_g2b_data():
     pure_key = API_KEY.strip()
     keywords = ["스쿨넷", "융합통신망", "교육망", "스마트기기"]
 
-    # ⭕ [핵심 변경] 화면 속 순수 나라장터 데이터를 100% 긁어오는 진짜 본진 API 주소로 전면 교체합니다.
+    # ⭕ 화면 속 순수 나라장터 데이터를 100% 긁어오는 진짜 본진 API 주소
     api_types = [
         {"name": "나라장터 본진 발주계획",
          "url": "https://apis.data.go.kr/1230000/Bps_OrderPlanInfoService/getBpsOrderPlanInfoList"}
     ]
 
-    # 본진 API는 한 방에 최대 31일치 조회가 가능하므로, 7일씩 쪼갤 필요 없이 오늘부터 한 달 전까지 통째로 긁어옵니다.
-    end_day = kst_now.strftime('%Y%m%d')
-    start_day = (kst_now - timedelta(days=31)).strftime('%Y%m%d')
+    # ⭐ [500 에러 해결의 핵심] 본진 API는 날짜에 반드시 하이픈(-)이 포함된 YYYY-MM-DD 규격을 요구합니다!
+    end_day = kst_now.strftime('%Y-%m-%d')
+    start_day = (kst_now - timedelta(days=31)).strftime('%Y-%m-%d')
 
     collected_dict = {}
 
     for api in api_types:
-        # 본진 API 전용 파라미터 셋팅 (bgnDt, endDt)
+        # URL에 들어가는 날짜 파라미터 형식을 하이픈 형태로 안전하게 전달합니다.
         full_url = f"{api['url']}?serviceKey={pure_key}&type=json&pageNo=1&numOfRows=999&bgnDt={start_day}&endDt={end_day}"
 
         try:
@@ -69,7 +69,6 @@ def get_g2b_data():
                     continue
 
                 for item in items:
-                    # ⭐ [중요] 본진 API 서버의 실제 변수명 규격으로 매핑 (prcmntPlanNm=발주명, orderInsttNm=기관명)
                     title = item.get('prcmntPlanNm') or ""
                     org = item.get('orderInsttNm') or item.get('coopsInsttNm') or "공공기관"
                     date_val = item.get('rgstDt') or kst_now.strftime('%Y-%m-%d')
@@ -97,7 +96,7 @@ def get_g2b_data():
                             "is_new": False
                         }
         except Exception as e:
-            print(f"⚠️ 본진 데이터 수집 중 일시적 오류 발생: {e}")
+            print(f"⚠️ 본진 데이터 수집 중 에러 발생 (대시 규격 확인 필요): {e}")
             continue
 
     final_items = list(collected_dict.values())
