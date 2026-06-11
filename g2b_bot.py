@@ -27,17 +27,17 @@ def get_current_kst():
 
 def get_g2b_data():
     kst_now = get_current_kst()
-    print(f"🏛️ 나라장터 [발주계획 목록] 검색 중... (한국 시간: {kst_now.strftime('%Y-%m-%d %H:%M')})")
+    print(f"🏛️ 나라장터 [발주계획 목록] 실시간 조회 중... (한국 시간: {kst_now.strftime('%Y-%m-%d %H:%M')})")
 
     if not API_KEY:
-        print("❌ 에러: DATA_GO_KR_API_KEY가 없습니다.")
+        print("❌ 에러: DATA_GO_KR_API_KEY 환경 변수가 설정되지 않았습니다.")
         return []
 
     pure_key = API_KEY.strip()
     decoded_key = urllib.parse.unquote(pure_key)
     encoded_key = urllib.parse.quote(decoded_key)
 
-    # 🎯 [발주계획 목록조회 화면] 전용 PPSSrch API 엔드포인트 연동 (용역 / 물품)
+    # 🎯 [문서 규격 100% 반영] 나라장터 검색조건 전용 PPSSrch API 엔드포인트 연동 (용역 / 물품)
     api_types = [
         {
             "name": "발주계획(용역)",
@@ -49,17 +49,18 @@ def get_g2b_data():
         }
     ]
 
-    # 날짜 조건 규격 반영: YYYYMMDD (8자리 포맷으로 최근 40일치 조회)
-    end_day = kst_now.strftime('%Y%m%d')
-    start_day = (kst_now - timedelta(days=40)).strftime('%Y%m%d')
+    # 🎯 [문서 60페이지 규격] 날짜 조건은 반드시 12자리 포맷(YYYYMMDDHHmm)이어야 합니다.
+    # 최근 40일치 발주데이터를 안전하게 수집합니다.
+    end_dt = kst_now.strftime('%Y%m%d2359')
+    start_dt = (kst_now - timedelta(days=40)).strftime('%Y%m%d0000')
 
-    # 🎯 요청하신 딱 4가지 핵심 검색 키워드
+    # 🎯 검색할 핵심 4대 키워드
     target_keywords = ["스쿨넷", "융합통신망", "교육망", "스마트기기"]
     collected_dict = {}
 
     for api in api_types:
-        # 안전하게 전체 목록을 수신한 뒤 파이썬 내부 필터링 (조달청 서버 검색 오류 원천 차단)
-        full_url = f"{api['url']}?serviceKey={encoded_key}&type=json&pageNo=1&numOfRows=1000&insttInptBgnDt={start_day}&insttInptEndDt={end_day}"
+        # 🎯 [문서 규격 반영] 날짜 요청 변수는 inqryBgnDt 및 inqryEndDt 입니다.
+        full_url = f"{api['url']}?serviceKey={encoded_key}&type=json&pageNo=1&numOfRows=1000&inqryBgnDt={start_dt}&inqryEndDt={end_dt}"
 
         try:
             req = urllib.request.Request(
@@ -82,18 +83,18 @@ def get_g2b_data():
                     continue
 
                 for item in items:
-                    # 🎯 [피드백 반영] 발주계획 화면의 '사업명(발주계획명)' 실제 데이터 태그 매핑
-                    title = item.get('prcmntPlanPjctNm') or ""
+                    # 🎯 [치명적 오류 해결] 공식 문서에 표기된 실제 발주계획 사업명 태그는 'bizNm' 입니다!
+                    title = item.get('bizNm') or ""
 
-                    # 4대 키워드가 사업명에 포함되어 있는지 철저히 검사
+                    # 사업명에 핵심 키워드가 포함되어 있는지 완벽 필터링
                     if title and any(kw in title for kw in target_keywords):
                         org = item.get('orderInsttNm') or "공공기관"
-                        date_val = item.get('insttInptDt') or kst_now.strftime('%Y-%m-%d')
-                        budget = item.get('totPrcmntAmt') or "0"
-                        url_code = item.get('prcmntPlanInfrntNo') or ""
+                        date_val = item.get('nticeDt') or kst_now.strftime('%Y-%m-%d')
+                        budget = item.get('sumOrderAmt') or "0"
+                        url_code = item.get('orderPlanUntyNo') or ""
 
                         if date_val and len(date_val) >= 10:
-                            date_val = date_val[:10]  # YYYY-MM-DD 형태로 규격화
+                            date_val = date_val[:10]  # YYYY-MM-DD 형태로 깔끔하게 포맷팅
 
                         unique_key = f"{org}_{title}".strip()
 
@@ -103,8 +104,8 @@ def get_g2b_data():
                         except:
                             budget_str = "미정"
 
-                        # 발주계획 상세조회 페이지 링크 매핑
-                        g2b_link = f"https://www.g2b.go.kr:8443/ep/preparation/plan/orderPlanDtl.do?prcmntPlanInfrntNo={url_code}" if url_code else "https://www.g2b.go.kr"
+                        # 발주계획 상세 통합조회 페이지 링크 생성
+                        g2b_link = f"https://www.g2b.go.kr:8443/ep/preparation/plan/orderPlanDtl.do?orderPlanUntyNo={url_code}" if url_code else "https://www.g2b.go.kr"
 
                         collected_dict[unique_key] = {
                             "category": api['name'],
@@ -138,7 +139,7 @@ def load_and_compare(current_items):
         if past_keys and (current_key not in past_keys):
             item['is_new'] = True
             new_count += 1
-            print(f"✨ [신규 발주계획 수집] {item['title']} ({item['org']})")
+            print(f"✨ [신규 발주계획 탐지] {item['title']} ({item['org']})")
 
     try:
         with open(HISTORY_FILE, "w", encoding="utf-8") as f:
@@ -148,7 +149,7 @@ def load_and_compare(current_items):
         subprocess.run(["git", "config", "--global", "user.name", "G2B-Bot"], capture_output=True)
         subprocess.run(["git", "config", "--global", "user.email", "bot@g2b.com"], capture_output=True)
         subprocess.run(["git", "add", HISTORY_FILE], capture_output=True)
-        subprocess.run(["git", "commit", "-m", "🤖 발주계획 실시간 동기화"], capture_output=True)
+        subprocess.run(["git", "commit", "-m", "🤖 발주계획 실시간 업데이트"], capture_output=True)
         subprocess.run(["git", "push"], capture_output=True)
     except:
         pass
@@ -161,15 +162,15 @@ def send_alerts(items, new_count):
     date_str = kst_now.strftime('%m/%d %H시')
 
     if not items:
-        print("검색 완료: 현재 나라장터 발주계획 서버에 조건에 일치하는 활성 계획이 없습니다.")
+        print("검색 완료: 현재 조건에 일치하는 발주계획 데이터가 조달청 서버에 없습니다.")
         return
 
-    print(f"\n====================================\n🔥 검색 성공! 총 {len(items)}건 화면 출력 매칭 (신규: {new_count}건)")
+    print(f"\n====================================\n🔥 검색 성공! 총 {len(items)}건 매칭 완료 (신규 데이터: {new_count}건)")
 
-    # Slack 알림
+    # Slack 알림 발송
     if SLACK_TOKEN and SLACK_CHANNEL:
         import requests
-        slack_text = f"🏛️ *나라장터 발주계획 4대 키워드 검색 현황 ({date_str})*\n\n"
+        slack_text = f"🏛️ *나라장터 발주계획 실시간 현황판 ({date_str})*\n\n"
         for idx, item in enumerate(items, 1):
             badge = "🔴 *[신규]* " if item['is_new'] else ""
             slack_text += f"{idx}. {badge}[{item['category']}] <{item['link']}|{item['title']}>\n   • 발주기관: {item['org']} | 등록일: {item['date']} | 예산: {item['budget']}\n"
@@ -180,15 +181,15 @@ def send_alerts(items, new_count):
         except:
             pass
 
-    # 메일 알림
+    # 메일 알림 발송
     if NAVER_EMAIL and NAVER_PASSWORD:
-        msg = MIMEMitpart()
+        msg = MIMEMultipart()
         msg[
             'Subject'] = f"🚨 [신규 발주 {new_count}건] 나라장터 실시간 검색 현황판" if new_count > 0 else f"✅ 나라장터 발주계획 검색 리포트 ({date_str})"
         msg['From'] = formataddr((str(Header('발주계획 알림이', 'utf-8')), NAVER_EMAIL))
         msg['To'] = NAVER_EMAIL
 
-        html_content = f"<h2>🏛️ 나라장터 지정 키워드 발주계획 검색 결과 ({date_str})</h2><hr><br>"
+        html_content = f"<h2>🏛️ 나라장터 지정 키ще워드 발주계획 검색 결과 ({date_str})</h2><hr><br>"
         html_content += "<table border='1' style='border-collapse:collapse; width:100%; font-size:13px; text-align:left;'>"
         html_content += "<tr style='background-color:#f2f2f2; height:35px;'><th>번호</th><th>구분</th><th>발주계획사업명(링크)</th><th>발주기관</th><th>등록일자</th><th>조달예산액</th></tr>"
 
