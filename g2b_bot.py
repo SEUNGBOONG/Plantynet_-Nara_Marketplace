@@ -7,6 +7,7 @@ from email.mime.multipart import MIMEMultipart
 from email.header import Header
 from email.utils import formataddr
 import urllib.request
+import urllib.parse
 import subprocess
 
 # 환경 변수 로드
@@ -27,90 +28,82 @@ def get_current_kst():
 
 def get_g2b_data():
     kst_now = get_current_kst()
-    print(f"나라장터 발주계획 정밀 분석 로봇 구동 중... (현재 한국 시간: {kst_now.strftime('%Y-%m-%d %H:%M')})")
+    print(f"🏛️ 나라장터 발주계획 정밀 요격 로봇 구동 중... (현재 한국 시간: {kst_now.strftime('%Y-%m-%d %H:%M')})")
 
     if not API_KEY:
         print("❌ 에러: DATA_GO_KR_API_KEY가 설정되지 않았습니다.")
         return []
 
+    # 조달청 특유의 키 깨짐 방지를 위해 안전하게 디코딩 후 재인코딩 처리
     pure_key = API_KEY.strip()
+    decoded_key = urllib.parse.unquote(pure_key)
+    encoded_key = urllib.parse.quote(decoded_key)
+
     keywords = ["스쿨넷", "융합통신망", "교육망", "스마트기기"]
 
-    # ⭕ [원래 안정적인 주소로 복귀] 500 에러가 나지 않던 최초의 API 서비스 구역입니다.
-    api_types = [
-        {
-            "name": "발주계획(용역)",
-            "url": "https://apis.data.go.kr/1230000/ao/OrderPlanSttusService/getOrderPlanSttusListServc",
-            "start_p": "insttInqryBgnDt", "end_p": "insttInqryEndDt"
-        },
-        {
-            "name": "발주계획(물품)",
-            "url": "https://apis.data.go.kr/1230000/ao/OrderPlanSttusService/getOrderPlanSttusListThng",
-            "start_p": "inqryBgnDt", "end_p": "inqryEndDt"
-        }
-    ]
+    # 승인받으신 발주계획현황서비스의 용역 방 주소 타격
+    url = "https://apis.data.go.kr/1230000/ao/OrderPlanSttusService/getOrderPlanSttusListServc"
 
-    # 💡 500 에러 없이 통과하기 위해, 7일씩 쪼개서 총 120일(약 4달치)의 과거 영역까지 깊숙하게 탐색합니다.
-    date_ranges = []
-    for i in range(18):
-        end_day = (kst_now - timedelta(days=i * 7)).strftime('%Y%m%d')
-        start_day = (kst_now - timedelta(days=(i + 1) * 7 - 1)).strftime('%Y%m%d')
-        date_ranges.append((start_day, end_day))
+    # 🎯 [핵심 보정] 웹 화면에 찍힌 '진행일자(2026/05/12 ~ 2026/06/11)' 범위를 100% 매칭하기 위해
+    # 최근 35일치를 'ntceBgnDt' 및 'ntceEndDt' 규격으로 완벽하게 타격합니다.
+    end_day = kst_now.strftime('%Y%m%d')
+    start_day = (kst_now - timedelta(days=35)).strftime('%Y%m%d')
 
     collected_dict = {}
 
-    for api in api_types:
-        for start_day, end_day in date_ranges:
-            # numOfRows는 안정적인 통신을 위해 100건으로 고정
-            full_url = f"{api['url']}?serviceKey={pure_key}&type=json&pageNo=1&numOfRows=100&{api['start_p']}={start_day}&{api['end_p']}={end_day}"
+    # 조달청 전용 파라미터 규격 적용 (게시시작일자/게시종료일자 기준 조회)
+    full_url = f"{url}?serviceKey={encoded_key}&type=json&pageNo=1&numOfRows=100&ntceBgnDt={start_day}&ntceEndDt={end_day}"
 
-            try:
-                req = urllib.request.Request(
-                    full_url,
-                    headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-                )
-                with urllib.request.urlopen(req, timeout=15) as response:
-                    response_body = response.read().decode('utf-8')
-                    data = json.loads(response_body)
-                    body = data.get('response', {}).get('body', {})
-                    items = body.get('items', [])
+    try:
+        req = urllib.request.Request(
+            full_url,
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        )
+        with urllib.request.urlopen(req, timeout=20) as response:
+            response_body = response.read().decode('utf-8')
 
-                    if isinstance(items, dict):
-                        items = [items]
-                    elif not items:
-                        continue
+            # 응답 데이터가 정상적인지 점검
+            if "INVALID_KEY" in response_body or "SERVICE_KEY" in response_body:
+                print("⚠️ 주의: 조달청 API 인증키에 문제가 발생했습니다. 인증 상태를 점검하세요.")
+                return []
 
-                    for item in items:
-                        # 변수명 예외처리 통합 수집
-                        title = item.get('orderPlanNm') or item.get('prcmntPlanNm') or ""
-                        org = item.get('orderPlanInsttNm') or item.get('dminsttNm') or item.get(
-                            'orderInsttNm') or "공공기관"
-                        date_val = item.get('orderPlanRgstDt') or item.get('rgstDt') or kst_now.strftime('%Y-%m-%d')
-                        budget = item.get('asignBdgtAmt') or "0"
+            data = json.loads(response_body)
+            body = data.get('response', {}).get('body', {})
+            items = body.get('items', [])
 
-                        if date_val:
-                            date_val = date_val.split()[0]
+            if isinstance(items, dict):
+                items = [items]
 
-                        # 키워드 검사
-                        if title and any(kw in title for kw in keywords):
-                            unique_key = f"{org}_{title}".strip()
+            for item in items:
+                # API가 제공하는 발주계획명, 발주기관명 태그 완벽 맵핑
+                title = item.get('orderPlanNm') or item.get('prcmntPlanNm') or ""
+                org = item.get('orderPlanInsttNm') or item.get('dminsttNm') or item.get('orderInsttNm') or "공공기관"
+                date_val = item.get('orderPlanRgstDt') or item.get('rgstDt') or kst_now.strftime('%Y-%m-%d')
+                budget = item.get('asignBdgtAmt') or "0"
 
-                            try:
-                                amt = int(budget)
-                                budget_str = f"{amt:,}원" if amt < 100000000 else f"{amt / 100000000:.1f}억원"
-                            except:
-                                budget_str = "미정"
+                if date_val:
+                    date_val = date_val.split()[0]
 
-                            collected_dict[unique_key] = {
-                                "category": api['name'],
-                                "title": title,
-                                "org": org,
-                                "date": date_val,
-                                "budget": budget_str,
-                                "is_new": False
-                            }
-            except:
-                continue
+                # 키워드 검색 진행
+                if title and any(kw in title for kw in keywords):
+                    unique_key = f"{org}_{title}".strip()
+
+                    try:
+                        amt = int(budget)
+                        budget_str = f"{amt:,}원" if amt < 100000000 else f"{amt / 100000000:.1f}억원"
+                    except:
+                        budget_str = "미정"
+
+                    collected_dict[unique_key] = {
+                        "category": "발주계획(용역)",
+                        "title": title,
+                        "org": org,
+                        "date": date_val,
+                        "budget": budget_str,
+                        "is_new": False
+                    }
+    except Exception as e:
+        print(f"⚠️ 데이터 파싱 중 에러 발생: {e}")
 
     final_items = list(collected_dict.values())
     final_items.sort(key=lambda x: x['date'], reverse=True)
@@ -155,13 +148,13 @@ def send_alerts(items, new_count):
     date_str = kst_now.strftime('%m/%d %H시')
 
     if not items:
-        print("검색 완료: 조건에 일치하는 발주 계획이 조달청 서버에 존재하지 않거나 아직 동기화 전입니다.")
+        print("검색 완료: 조건에 일치하는 발주 계획이 조달청 서버에 존재하지 않습니다.")
         return
 
     new_alert_header = f"🚨 [★이전 보고 대비 신규 발주계획 {new_count}건 추가됨!★]" if new_count > 0 else "✅ 이전 보고 대비 새로 추가된 발주 없음"
     print(f"\n====================================\n정기 리포트 브리핑 가동: 총 {len(items)}건 송신 처리 ({new_alert_header})")
 
-    # 2. Slack 브리핑 전송
+    # Slack 브리핑 전송
     if SLACK_TOKEN and SLACK_CHANNEL:
         import requests
         slack_text = f"🏛️ *나라장터 핵심 발주계획 종합 현황판 ({date_str} 기준)*\n"
@@ -176,7 +169,7 @@ def send_alerts(items, new_count):
         except:
             pass
 
-    # 3. 네이버 이메일 현황판 전송
+    # 네이버 이메일 현황판 전송
     if NAVER_EMAIL and NAVER_PASSWORD:
         msg = MIMEMultipart()
         subject_title = f"🚨 [신규발주 {new_count}건!!] 나라장터 발주계획 종합 리포트" if new_count > 0 else f"[현황판] 나라장터 발주계획 종합 리포트 ({date_str})"
