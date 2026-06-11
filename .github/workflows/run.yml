@@ -1,34 +1,38 @@
-name: G2B Notice Checker
+name: G2B Bot Schedule
 
 on:
   schedule:
-    # 💡 세계 표준시(UTC) 기준이라 한국 시간(KST)보다 9시간 느립니다.
-    # 한국 시간 09시, 12시, 15시, 18시에 정확히 맞춘 크론 세팅입니다.
-    - cron: '0 0,3,6,9 * * *'
-  workflow_dispatch: # 필요할 때 언제든 수동으로 바로 실행시키는 버튼 생성
+    # 🎯 한국 표준시(KST) 평일 월~금요일 오전 9시부터 오후 6시까지 매 정시 정각 작동 (UTC 기준 변환 완료)
+    - cron: '0 0 * * 1-5' # 09:00 KST
+    - cron: '0 1 * * 1-5' # 10:00 KST
+    - cron: '0 2 * * 1-5' # 11:00 KST
+    - cron: '0 3 * * 1-5' # 12:00 KST
+    - cron: '0 4 * * 1-5' # 13:00 KST
+    - cron: '0 5 * * 1-5' # 14:00 KST
+    - cron: '0 6 * * 1-5' # 15:00 KST
+    - cron: '0 7 * * 1-5' # 16:00 KST
+    - cron: '0 8 * * 1-5' # 17:00 KST
+    - cron: '0 9 * * 1-5' # 18:00 KST
+  workflow_dispatch:
 
 jobs:
-  check-and-alert:
+  run-bot:
     runs-on: ubuntu-latest
     steps:
-    - name: 소스코드 가져오기
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-    - name: 파이썬 컴퓨터 세팅
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
 
-    - name: 라이브러리 설치
-      run: |
-        pip install requests
-
-    - name: 나라장터 봇 실행
-      env:
-        DATA_GO_KR_API_KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
-        TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
-        NAVER_EMAIL: ${{ secrets.NAVER_EMAIL }}
-        NAVER_PASSWORD: ${{ secrets.NAVER_PASSWORD }}
-        SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}        # 🌟 슬랙 토큰 열쇠 장착!
-        SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL }}    # 🌟 슬랙 채널 ID 열쇠 장착!
-      run: python g2b_bot.py
+      - name: Run python g2b_bot.py
+        run: python g2b_bot.py
+        env:
+          DATA_GO_KR_API_KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
+          TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+          NAVER_EMAIL: ${{ secrets.NAVER_EMAIL }}
+          NAVER_PASSWORD: ${{ secrets.NAVER_PASSWORD }}
+          SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
+          SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL }}
