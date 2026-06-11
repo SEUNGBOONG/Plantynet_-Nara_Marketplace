@@ -22,7 +22,6 @@ HISTORY_FILE = "last_g2b_data.txt"
 
 
 def get_current_kst():
-    """해외 깃허브 서버에서도 항상 정확한 한국 시간(KST)을 반환합니다."""
     return datetime.now(timezone(timedelta(hours=9)))
 
 
@@ -34,12 +33,11 @@ def get_g2b_data():
         print("❌ 에러: DATA_GO_KR_API_KEY가 설정되지 않았습니다.")
         return []
 
-    # 인증키 유효성 보장 처리
     pure_key = API_KEY.strip()
     decoded_key = urllib.parse.unquote(pure_key)
     encoded_key = urllib.parse.quote(decoded_key)
 
-    # 입찰공고정보서비스 검색조건 전용 주소 셋팅
+    # 🎯 [치트키] 조달청 한글 검색 버그를 피하기 위해, 서버에는 키워드를 던지지 않고 날짜로만 조회합니다!
     api_types = [
         {
             "name": "입찰공고(용역)",
@@ -51,42 +49,44 @@ def get_g2b_data():
         }
     ]
 
-    # 🎯 [핵심 보정] 시/분(HHMM)을 완전히 제거하고 조달청 규격에 맞춰 딱 8자리(YYYYMMDD)로 매칭합니다.
-    end_day = kst_now.strftime('%Y%m%d')
-    start_day = (kst_now - timedelta(days=45)).strftime('%Y%m%d')  # 5월 초부터 싹 훑기
+    # 🎯 [정확한 파라미터 맵핑] PPSSrch API의 진짜 날짜 규격은 inqryBgnDt와 inqryEndDt 입니다!
+    # 시/분까지 정확히 12자리를 요구합니다. (YYYYMMDDHHMM)
+    end_day = kst_now.strftime('%Y%m%d2359')
+    start_day = (kst_now - timedelta(days=40)).strftime('%Y%m%d0000')
 
-    keywords = ["스쿨넷", "융합통신망", "교육망", "스마트기기"]
+    keywords = ["스쿨넷", "융합통신망", "교육망", "스마트기기", "스마트패드", "노트북"]
     collected_dict = {}
 
     for api in api_types:
-        for kw in keywords:
-            encoded_kw = urllib.parse.quote(kw)
+        # 데이터 유실을 막기 위해 넉넉하게 1000건을 한 번에 요청합니다.
+        full_url = f"{api['url']}?serviceKey={encoded_key}&type=json&pageNo=1&numOfRows=1000&inqryBgnDt={start_day}&inqryEndDt={end_day}"
 
-            # 🎯 파라미터 날짜 형식을 8자리 규격(YYYYMMDD)으로 완전히 통일하여 호출합니다.
-            full_url = f"{api['url']}?serviceKey={encoded_key}&type=json&pageNo=1&numOfRows=100&inpraQrPtBgnDt={start_day}&inpraQrPtEndDt={end_day}&bidNtceNm={encoded_kw}"
+        try:
+            req = urllib.request.Request(
+                full_url,
+                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+            )
+            with urllib.request.urlopen(req, timeout=20) as response:
+                response_body = response.read().decode('utf-8')
 
-            try:
-                req = urllib.request.Request(
-                    full_url,
-                    headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-                )
-                with urllib.request.urlopen(req, timeout=15) as response:
-                    response_body = response.read().decode('utf-8')
+                if "INVALID_KEY" in response_body or "SERVICE_KEY" in response_body:
+                    print(f"⚠️ {api['name']} 인증키 거부 현상 발생, 토큰 형식을 점검하세요.")
+                    continue
 
-                    if "INVALID_KEY" in response_body or "SERVICE_KEY" in response_body:
-                        continue
+                data = json.loads(response_body)
+                body = data.get('response', {}).get('body', {})
+                items = body.get('items', [])
 
-                    data = json.loads(response_body)
-                    body = data.get('response', {}).get('body', {})
-                    items = body.get('items', [])
+                if isinstance(items, dict):
+                    items = [items]
+                elif not items:
+                    continue
 
-                    if isinstance(items, dict):
-                        items = [items]
-                    elif not items:
-                        continue
+                for item in items:
+                    title = item.get('bidNtceNm') or ""
 
-                    for item in items:
-                        title = item.get('bidNtceNm') or ""
+                    # 🎯 조달청 서버 대신 파이썬이 완벽하게 키워드를 필터링합니다.
+                    if title and any(kw in title for kw in keywords):
                         org = item.get('dminsttNm') or item.get('ntceInsttNm') or "공공기관"
                         date_val = item.get('bidNtceDt') or kst_now.strftime('%Y-%m-%d')
                         budget = item.get('bdgtAmt') or item.get('presmptPrce') or "0"
@@ -95,28 +95,28 @@ def get_g2b_data():
                         if date_val:
                             date_val = date_val.split()[0]
 
-                        if title:
-                            unique_key = f"{org}_{title}".strip()
+                        unique_key = f"{org}_{title}".strip()
 
-                            try:
-                                amt = int(float(budget))
-                                budget_str = f"{amt:,}원" if amt < 100000000 else f"{amt / 100000000:.1f}억원"
-                            except:
-                                budget_str = "미정"
+                        try:
+                            amt = int(float(budget))
+                            budget_str = f"{amt:,}원" if amt < 100000000 else f"{amt / 100000000:.1f}억원"
+                        except:
+                            budget_str = "미정"
 
-                            g2b_link = f"https://www.g2b.go.kr:8443/ep/invitation/publish/bidInfoDtl.do?bidNo={url_code}&bidChgNo=00" if url_code else "https://www.g2b.go.kr"
+                        g2b_link = f"https://www.g2b.go.kr:8443/ep/invitation/publish/bidInfoDtl.do?bidNo={url_code}&bidChgNo=00" if url_code else "https://www.g2b.go.kr"
 
-                            collected_dict[unique_key] = {
-                                "category": api['name'],
-                                "title": title,
-                                "org": org,
-                                "date": date_val,
-                                "budget": budget_str,
-                                "link": g2b_link,
-                                "is_new": False
-                            }
-            except:
-                continue
+                        collected_dict[unique_key] = {
+                            "category": api['name'],
+                            "title": title,
+                            "org": org,
+                            "date": date_val,
+                            "budget": budget_str,
+                            "link": g2b_link,
+                            "is_new": False
+                        }
+        except Exception as e:
+            print(f"❌ {api['name']} 통신 에러: {e}")
+            continue
 
     final_items = list(collected_dict.values())
     final_items.sort(key=lambda x: x['date'], reverse=True)
