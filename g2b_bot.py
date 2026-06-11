@@ -27,7 +27,7 @@ def get_current_kst():
 
 def get_g2b_data():
     kst_now = get_current_kst()
-    print(f"나라장터 발주계획 정밀 분석 로봇 구동 중... (현재 한국 시간: {kst_now.strftime('%Y-%m-%d %H:%M')})")
+    print(f"나라장터 본진 발주계획 정밀 분석 로봇 구동 중... (현재 한국 시간: {kst_now.strftime('%Y-%m-%d %H:%M')})")
 
     if not API_KEY:
         print("❌ 에러: DATA_GO_KR_API_KEY가 설정되지 않았습니다.")
@@ -36,74 +36,69 @@ def get_g2b_data():
     pure_key = API_KEY.strip()
     keywords = ["스쿨넷", "융합통신망", "교육망", "스마트기기"]
 
-    # ⭕ 이미 승인받으신 [발주계획현황서비스]의 용역과 물품 주소입니다.
+    # ⭕ [핵심 변경] 화면 속 순수 나라장터 데이터를 100% 긁어오는 진짜 본진 API 주소로 전면 교체합니다.
     api_types = [
-        {"name": "발주계획(용역)",
-         "url": "https://apis.data.go.kr/1230000/ao/OrderPlanSttusService/getOrderPlanSttusListServc"},
-        {"name": "발주계획(물품)",
-         "url": "https://apis.data.go.kr/1230000/ao/OrderPlanSttusService/getOrderPlanSttusListThng"}
+        {"name": "나라장터 본진 발주계획",
+         "url": "https://apis.data.go.kr/1230000/Bps_OrderPlanInfoService/getBpsOrderPlanInfoList"}
     ]
 
-    # 검색 누락을 막기 위해 90일치(약 3달치) 영역을 안전하게 탐색합니다.
-    date_ranges = []
-    for i in range(13):
-        end_day = (kst_now - timedelta(days=i * 7)).strftime('%Y%m%d')
-        start_day = (kst_now - timedelta(days=(i + 1) * 7 - 1)).strftime('%Y%m%d')
-        date_ranges.append((start_day, end_day))
+    # 본진 API는 한 방에 최대 31일치 조회가 가능하므로, 7일씩 쪼갤 필요 없이 오늘부터 한 달 전까지 통째로 긁어옵니다.
+    end_day = kst_now.strftime('%Y%m%d')
+    start_day = (kst_now - timedelta(days=31)).strftime('%Y%m%d')
 
     collected_dict = {}
 
     for api in api_types:
-        for start_day, end_day in date_ranges:
-            full_url = f"{api['url']}?serviceKey={pure_key}&type=json&pageNo=1&numOfRows=100&insttInqryBgnDt={start_day}&insttInqryEndDt={end_day}"
+        # 본진 API 전용 파라미터 셋팅 (bgnDt, endDt)
+        full_url = f"{api['url']}?serviceKey={pure_key}&type=json&pageNo=1&numOfRows=999&bgnDt={start_day}&endDt={end_day}"
 
-            try:
-                req = urllib.request.Request(
-                    full_url,
-                    headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-                )
-                with urllib.request.urlopen(req, timeout=20) as response:
-                    response_body = response.read().decode('utf-8')
-                    data = json.loads(response_body)
-                    body = data.get('response', {}).get('body', {})
-                    items = body.get('items', [])
+        try:
+            req = urllib.request.Request(
+                full_url,
+                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+            )
+            with urllib.request.urlopen(req, timeout=20) as response:
+                response_body = response.read().decode('utf-8')
+                data = json.loads(response_body)
+                body = data.get('response', {}).get('body', {})
+                items = body.get('items', [])
 
-                    if isinstance(items, dict):
-                        items = [items]
-                    elif not items:
-                        continue
+                if isinstance(items, dict):
+                    items = [items]
+                elif not items:
+                    continue
 
-                    for item in items:
-                        # ⭐ [핵심 보정] 용역과 물품 API의 서로 다른 변수명을 통합하여 다 읽어옵니다.
-                        title = item.get('orderPlanNm') or item.get('prcmntPlanNm') or ""
-                        org = item.get('orderPlanInsttNm') or item.get('dminsttNm') or item.get(
-                            'orderInsttNm') or "공공기관"
-                        date_val = item.get('orderPlanRgstDt') or item.get('rgstDt') or kst_now.strftime('%Y-%m-%d')
-                        budget = item.get('asignBdgtAmt') or "0"
+                for item in items:
+                    # ⭐ [중요] 본진 API 서버의 실제 변수명 규격으로 매핑 (prcmntPlanNm=발주명, orderInsttNm=기관명)
+                    title = item.get('prcmntPlanNm') or ""
+                    org = item.get('orderInsttNm') or item.get('coopsInsttNm') or "공공기관"
+                    date_val = item.get('rgstDt') or kst_now.strftime('%Y-%m-%d')
+                    budget = item.get('asignBdgtAmt') or "0"
 
-                        if date_val:
-                            date_val = date_val.split()[0]
+                    if date_val:
+                        date_val = date_val.split()[0]
 
-                        # 키워드 필터링
-                        if title and any(kw in title for kw in keywords):
-                            unique_key = f"{org}_{title}".strip()
+                    # 키워드 매칭 검사
+                    if title and any(kw in title for kw in keywords):
+                        unique_key = f"{org}_{title}".strip()
 
-                            try:
-                                amt = int(budget)
-                                budget_str = f"{amt:,}원" if amt < 100000000 else f"{amt / 100000000:.1f}억원"
-                            except:
-                                budget_str = "미정"
+                        try:
+                            amt = int(budget)
+                            budget_str = f"{amt:,}원" if amt < 100000000 else f"{amt / 100000000:.1f}억원"
+                        except:
+                            budget_str = "미정"
 
-                            collected_dict[unique_key] = {
-                                "category": api['name'],
-                                "title": title,
-                                "org": org,
-                                "date": date_val,
-                                "budget": budget_str,
-                                "is_new": False
-                            }
-            except:
-                continue
+                        collected_dict[unique_key] = {
+                            "category": api['name'],
+                            "title": title,
+                            "org": org,
+                            "date": date_val,
+                            "budget": budget_str,
+                            "is_new": False
+                        }
+        except Exception as e:
+            print(f"⚠️ 본진 데이터 수집 중 일시적 오류 발생: {e}")
+            continue
 
     final_items = list(collected_dict.values())
     final_items.sort(key=lambda x: x['date'], reverse=True)
@@ -148,15 +143,11 @@ def send_alerts(items, new_count):
     date_str = kst_now.strftime('%m/%d %H시')
 
     if not items:
-        print("검색 완료: 조건에 일치하는 발주 계획이 조달청 API 서버에 존재하지 않습니다.")
+        print("검색 완료: 조건에 일치하는 발주 계획이 조달청 본진 API 서버에 존재하지 않습니다.")
         return
 
     new_alert_header = f"🚨 [★이전 보고 대비 신규 발주계획 {new_count}건 추가됨!★]" if new_count > 0 else "✅ 이전 보고 대비 새로 추가된 발주 없음"
     print(f"\n====================================\n정기 리포트 브리핑 가동: 총 {len(items)}건 송신 처리 ({new_alert_header})")
-
-    # # 1. MS Teams 브리핑 전송 (잠시 보류)
-    # teams_text = f"### 🏛️ 나라장터 발주계획 종합 현황판 ({date_str} 기준)\n"
-    # ... (생략) ...
 
     # 2. Slack 브리핑 전송
     if SLACK_TOKEN and SLACK_CHANNEL:
@@ -174,3 +165,43 @@ def send_alerts(items, new_count):
             pass
 
     # 3. 네이버 이메일 현황판 전송
+    if NAVER_EMAIL and NAVER_PASSWORD:
+        msg = MIMEMultipart()
+        subject_title = f"🚨 [신규발주 {new_count}건!!] 나라장터 발주계획 종합 리포트" if new_count > 0 else f"[현황판] 나라장터 발주계획 종합 리포트 ({date_str})"
+        msg['Subject'] = subject_title
+        msg['From'] = formataddr((str(Header('발주계획 감시봇', 'utf-8')), NAVER_EMAIL))
+        msg['To'] = NAVER_EMAIL
+
+        html_content = f"<h2>🏛️ 나라장터 핵심 발주계획 종합 현황판 ({date_str})</h2>"
+        html_content += f"<p style='font-size:14px; color:#d9534f;'><b>{new_alert_header}</b></p><hr><br>"
+        html_content += "<table border='1' style='border-collapse:collapse; width:100%; text-align:left; font-size:13px;'>"
+        html_content += "<tr style='background-color:#f2f2f2; height:35px;'><th>번호</th><th>구분</th><th>발주사업명</th><th>수요기관</th><th>등록일자</th><th>배정예산</th></tr>"
+
+        for idx, item in enumerate(items, 1):
+            bg_style = "style='background-color: #fff1f0;'" if item['is_new'] else ""
+            badge_html = "<span style='background-color:#d9534f; color:white; padding:2px 5px; font-size:11px; border-radius:3px; margin-right:5px;'>신규추가</span> " if \
+            item['is_new'] else ""
+
+            html_content += f"<tr {bg_style}>" \
+                            f"<td style='padding:10px;'>{idx}</td>" \
+                            f"<td style='padding:10px;'>{item['category']}</td>" \
+                            f"<td style='padding:10px;'>{badge_html}<b>{item['title']}</b></td>" \
+                            f"<td style='padding:10px;'>{item['org']}</td>" \
+                            f"<td style='padding:10px;'>{item['date']}</td>" \
+                            f"<td style='padding:10px; color:blue; font-weight:bold;'>{item['budget']}</td>" \
+                            f"</tr>"
+        html_content += "</table>"
+
+        msg.attach(MIMEText(html_content, 'html'))
+        try:
+            with smtplib.SMTP_SSL("smtp.naver.com", 465) as server:
+                server.login(NAVER_EMAIL, NAVER_PASSWORD)
+                server.sendmail(NAVER_EMAIL, [NAVER_EMAIL], msg.as_string())
+        except:
+            pass
+
+
+if __name__ == "__main__":
+    raw_items = get_g2b_data()
+    compared_items, new_detected = load_and_compare(raw_items)
+    send_alerts(compared_items, new_detected)
