@@ -44,9 +44,9 @@ def get_g2b_data():
          "url": "https://apis.data.go.kr/1230000/ao/OrderPlanSttusService/getOrderPlanSttusListThng"}
     ]
 
-    # 조달청 7일 조회 제한 우회를 위해 최근 28일치를 4개 구간으로 쪼개서 검색
+    # 💡 조달청 7일 제한을 풀고, 동기화 누락을 막기 위해 최근 91일(약 3달치)을 7일씩 13개 구간으로 쪼개서 전부 긁어옵니다.
     date_ranges = []
-    for i in range(4):
+    for i in range(13):
         end_day = (kst_now - timedelta(days=i * 7)).strftime('%Y%m%d')
         start_day = (kst_now - timedelta(days=(i + 1) * 7 - 1)).strftime('%Y%m%d')
         date_ranges.append((start_day, end_day))
@@ -82,6 +82,7 @@ def get_g2b_data():
                         if date_val:
                             date_val = date_val.split()[0]
 
+                        # 키워드 매칭 검사
                         if title and any(kw in title for kw in keywords):
                             unique_key = f"{org}_{title}".strip()
 
@@ -103,12 +104,13 @@ def get_g2b_data():
                 continue
 
     final_items = list(collected_dict.values())
+    # 날짜 최신순으로 정렬
     final_items.sort(key=lambda x: x['date'], reverse=True)
     return final_items
 
 
 def load_and_compare(current_items):
-    """3시간 전(이전 실행) 데이터와 비교하여 새로 추가된 발주건이 있으면 딱지를 붙입니다."""
+    """이전 타임 발주 내역과 비교 분석하여 신규 등록 건에 특수 마킹을 진행합니다."""
     past_keys = set()
     if os.path.exists(HISTORY_FILE):
         try:
@@ -123,7 +125,7 @@ def load_and_compare(current_items):
         if past_keys and (current_key not in past_keys):
             item['is_new'] = True
             new_count += 1
-            print(f"✨ [새로운 발주계획 추가 발견] -> {item['title']}")
+            print(f"✨ [새로운 발주계획 추가 발견] -> {item['title']} ({item['org']})")
 
     try:
         with open(HISTORY_FILE, "w", encoding="utf-8") as f:
@@ -146,19 +148,19 @@ def send_alerts(items, new_count):
     date_str = kst_now.strftime('%m/%d %H시')
 
     if not items:
-        print("검색 완료: 조건에 일치하는 한 달 치 발주 계획이 조달청 서버에 없습니다.")
+        print("검색 완료: 조건에 일치하는 발주 계획이 조달청 API 서버에 아직 존재하지 않습니다.")
         return
 
-    new_alert_header = f"🚨 [★이전 대비 신규 발주계획 {new_count}건 추가됨!★]" if new_count > 0 else "✅ 이전 대비 새로 추가된 발주 없음"
-    print(f"\n====================================\n최종 발송 리포트: 총 {len(items)}건 브리핑 진행 ({new_alert_header})")
+    new_alert_header = f"🚨 [★이전 보고 대비 신규 발주계획 {new_count}건 추가됨!★]" if new_count > 0 else "✅ 이전 보고 대비 새로 추가된 발주 없음"
+    print(f"\n====================================\n정기 리포트 브리핑 가동: 총 {len(items)}건 송신 처리 ({new_alert_header})")
 
     # # 1. MS Teams 브리핑 전송 (잠시 보류)
     # teams_text = f"### 🏛️ 나라장터 발주계획 종합 현황판 ({date_str} 기준)\n"
     # teams_text += f"**{new_alert_header}**\n"
-    # teams_text += f"*※ 최근 한 달간 등록된 4대 핵심 키워드 발주계획 전체 현황판입니다.*\n\n"
+    # teams_text += f"*※ 최근 등록된 4대 핵심 키워드 발주계획 전체 현황판입니다.*\n\n"
     #
     # for idx, item in enumerate(items, 1):
-    #     badge = "🔴 **[★신규 추가됨★]** " if item['is_new'] else ""
+    #     badge = "🔴 **[★신규 추가공고★]** " if item['is_new'] else ""
     #     teams_text += f"{idx}. {badge}**[{item['category']}] {item['title']}**\n"
     #     teams_text += f"└ *발주기관: {item['org']} / 등록일: {item['date']} / 예산: {item['budget']}*\n\n"
     #
@@ -196,7 +198,7 @@ def send_alerts(items, new_count):
     # 3. 네이버 이메일 현황판 전송
     if NAVER_EMAIL and NAVER_PASSWORD:
         msg = MIMEMultipart()
-        subject_title = f"🚨 [신규발주 {new_count}건] 나라장터 발주계획 리포트" if new_count > 0 else f"[현황판] 나라장터 발주계획 종합 리포트 ({date_str})"
+        subject_title = f"🚨 [신규발주 {new_count}건!!] 나라장터 발주계획 종합 리포트" if new_count > 0 else f"[현황판] 나라장터 발주계획 종합 리포트 ({date_str})"
         msg['Subject'] = subject_title
         msg['From'] = formataddr((str(Header('발주계획 감시봇', 'utf-8')), NAVER_EMAIL))
         msg['To'] = NAVER_EMAIL
