@@ -28,82 +28,87 @@ def get_current_kst():
 
 def get_g2b_data():
     kst_now = get_current_kst()
-    print(f"🏛️ 나라장터 발주계획 정밀 요격 로봇 구동 중... (현재 한국 시간: {kst_now.strftime('%Y-%m-%d %H:%M')})")
+    print(f"🏛️ 나라장터 검색조건 전용 로봇 구동 중... (현재 한국 시간: {kst_now.strftime('%Y-%m-%d %H:%M')})")
 
     if not API_KEY:
         print("❌ 에러: DATA_GO_KR_API_KEY가 설정되지 않았습니다.")
         return []
 
-    # 조달청 특유의 키 깨짐 방지를 위해 안전하게 디코딩 후 재인코딩 처리
     pure_key = API_KEY.strip()
     decoded_key = urllib.parse.unquote(pure_key)
     encoded_key = urllib.parse.quote(decoded_key)
 
-    keywords = ["스쿨넷", "융합통신망", "교육망", "스마트기기"]
+    # 🎯 [핵심 타격 주소 교체] 웹 화면과 똑같이 작동하는 7번 '검색조건에 의한 용역조회' API를 사용합니다!
+    url = "https://apis.data.go.kr/1230000/ao/OrderPlanSttusService/getOrderPlanSttusListServcPPSSrch"
 
-    # 승인받으신 발주계획현황서비스의 용역 방 주소 타격
-    url = "https://apis.data.go.kr/1230000/ao/OrderPlanSttusService/getOrderPlanSttusListServc"
-
-    # 🎯 [핵심 보정] 웹 화면에 찍힌 '진행일자(2026/05/12 ~ 2026/06/11)' 범위를 100% 매칭하기 위해
-    # 최근 35일치를 'ntceBgnDt' 및 'ntceEndDt' 규격으로 완벽하게 타격합니다.
+    # 나라장터 웹 화면에 입력하신 날짜 범위 그대로 셋팅합니다. (최근 30일)
     end_day = kst_now.strftime('%Y%m%d')
-    start_day = (kst_now - timedelta(days=35)).strftime('%Y%m%d')
+    start_day = (kst_now - timedelta(days=30)).strftime('%Y%m%d')
 
     collected_dict = {}
 
-    # 조달청 전용 파라미터 규격 적용 (게시시작일자/게시종료일자 기준 조회)
-    full_url = f"{url}?serviceKey={encoded_key}&type=json&pageNo=1&numOfRows=100&ntceBgnDt={start_day}&ntceEndDt={end_day}"
+    # 추적할 핵심 키워드 리스트
+    keywords = ["스쿨넷", "융합통신망", "스마트기기"]
 
-    try:
-        req = urllib.request.Request(
-            full_url,
-            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        )
-        with urllib.request.urlopen(req, timeout=20) as response:
-            response_body = response.read().decode('utf-8')
+    for kw in keywords:
+        # 조달청 서버가 한글 키워드를 인식할 수 있도록 인코딩 처리
+        encoded_kw = urllib.parse.quote(kw)
 
-            # 응답 데이터가 정상적인지 점검
-            if "INVALID_KEY" in response_body or "SERVICE_KEY" in response_body:
-                print("⚠️ 주의: 조달청 API 인증키에 문제가 발생했습니다. 인증 상태를 점검하세요.")
-                return []
+        # 🎯 PPSSrch 서비스 규격에 맞는 검색 파라미터 설정
+        # bgnDt: 발주계획 시작년월일 / endDt: 발주계획 종료년월일 / prcmntPlanNm: 사업명(키워드)
+        full_url = f"{url}?serviceKey={encoded_key}&type=json&pageNo=1&numOfRows=100&bgnDt={start_day}&endDt={end_day}&prcmntPlanNm={encoded_kw}"
 
-            data = json.loads(response_body)
-            body = data.get('response', {}).get('body', {})
-            items = body.get('items', [])
+        try:
+            req = urllib.request.Request(
+                full_url,
+                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+            )
+            with urllib.request.urlopen(req, timeout=15) as response:
+                response_body = response.read().decode('utf-8')
 
-            if isinstance(items, dict):
-                items = [items]
+                if "INVALID_KEY" in response_body or "SERVICE_KEY" in response_body:
+                    print(f"⚠️ 공공데이터포털 인증키 에러 반응 감지됨.")
+                    continue
 
-            for item in items:
-                # API가 제공하는 발주계획명, 발주기관명 태그 완벽 맵핑
-                title = item.get('orderPlanNm') or item.get('prcmntPlanNm') or ""
-                org = item.get('orderPlanInsttNm') or item.get('dminsttNm') or item.get('orderInsttNm') or "공공기관"
-                date_val = item.get('orderPlanRgstDt') or item.get('rgstDt') or kst_now.strftime('%Y-%m-%d')
-                budget = item.get('asignBdgtAmt') or "0"
+                data = json.loads(response_body)
+                body = data.get('response', {}).get('body', {})
+                items = body.get('items', [])
 
-                if date_val:
-                    date_val = date_val.split()[0]
+                if isinstance(items, dict):
+                    items = [items]
+                elif not items:
+                    continue
 
-                # 키워드 검색 진행
-                if title and any(kw in title for kw in keywords):
-                    unique_key = f"{org}_{title}".strip()
+                for item in items:
+                    # PPSSrch API 규격의 결과 변수명 추출
+                    title = item.get('prcmntPlanNm') or item.get('orderPlanNm') or ""
+                    org = item.get('dminsttNm') or item.get('orderPlanInsttNm') or "공공기관"
+                    date_val = item.get('rgstDt') or item.get('orderPlanRgstDt') or kst_now.strftime('%Y-%m-%d')
+                    budget = item.get('asignBdgtAmt') or "0"
 
-                    try:
-                        amt = int(budget)
-                        budget_str = f"{amt:,}원" if amt < 100000000 else f"{amt / 100000000:.1f}억원"
-                    except:
-                        budget_str = "미정"
+                    if date_val:
+                        date_val = date_val.split()[0]
 
-                    collected_dict[unique_key] = {
-                        "category": "발주계획(용역)",
-                        "title": title,
-                        "org": org,
-                        "date": date_val,
-                        "budget": budget_str,
-                        "is_new": False
-                    }
-    except Exception as e:
-        print(f"⚠️ 데이터 파싱 중 에러 발생: {e}")
+                    if title:
+                        unique_key = f"{org}_{title}".strip()
+
+                        try:
+                            amt = int(budget)
+                            budget_str = f"{amt:,}원" if amt < 100000000 else f"{amt / 100000000:.1f}억원"
+                        except:
+                            budget_str = "미정"
+
+                        collected_dict[unique_key] = {
+                            "category": "일반용역(발주계획)",
+                            "title": title,
+                            "org": org,
+                            "date": date_val,
+                            "budget": budget_str,
+                            "is_new": False
+                        }
+        except Exception as e:
+            print(f"⚠️ {kw} 검색 중 임시 패스: {e}")
+            continue
 
     final_items = list(collected_dict.values())
     final_items.sort(key=lambda x: x['date'], reverse=True)
