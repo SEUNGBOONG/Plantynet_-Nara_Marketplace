@@ -13,17 +13,16 @@ from email.utils import formataddr
 API_BASE = "https://apis.data.go.kr/1230000/ao/OrderPlanSttusService"
 HISTORY_FILE = "last_g2b_data.txt"
 
+# 환경변수 정의 (Slack 제거 및 Teams 추가)
 API_KEY = os.environ.get("DATA_GO_KR_API_KEY")
 NAVER_EMAIL = os.environ.get("NAVER_EMAIL")
 NAVER_PASSWORD = os.environ.get("NAVER_PASSWORD")
-SLACK_TOKEN = os.environ.get("SLACK_TOKEN")
-SLACK_CHANNEL = os.environ.get("SLACK_CHANNEL")
+TEAMS_WEBHOOK_URL = os.environ.get("TEAMS_WEBHOOK_URL")
 
 DEFAULT_KEYWORDS = ["스쿨넷", "융합통신망", "교육망", "스마트기기"]
 SEARCH_DAYS = int(os.environ.get("G2B_SEARCH_DAYS", "40"))
 ORDER_MONTHS_AHEAD = int(os.environ.get("G2B_ORDER_MONTHS_AHEAD", "12"))
 
-# 명세서 기준 PPSSrch 4대 엔드포인트
 ORDER_PLAN_ENDPOINTS = [
     ("발주계획(물품)", "getOrderPlanSttusListThngPPSSrch"),
     ("발주계획(공사)", "getOrderPlanSttusListCnstwkPPSSrch"),
@@ -141,16 +140,14 @@ def get_date_ranges(kst_now):
     order_end = end_dt + timedelta(days=ORDER_MONTHS_AHEAD * 31)
     order_end = order_end.replace(day=1)
 
-    # 🎯 [08번 필수값 에러 완벽 해결]
-    # 조달청이 어떤 날짜 필수 변수 조합을 요구하든 다 충족되도록 명세서의 모든 날짜 포맷을 한꺼번에 제공합니다.
     return {
         "orderBgnYm": order_start.strftime("%Y%m"),
         "orderEndYm": order_end.strftime("%Y%m"),
-        "insttInptBgnDt": start_dt.strftime("%Y%m%d"),      # 8자리 등록시작
-        "insttInptEndDt": end_dt.strftime("%Y%m%d"),        # 8자리 등록종료
-        "inqryBgnDt": start_dt.strftime("%Y%m%d0000"),      # 12자리 조회시작
-        "inqryEndDt": end_dt.strftime("%Y%m%d2359"),        # 12자리 조회종료
-        "inqryDiv": "1"                                     # 조회구분 (기본값 설정)
+        "insttInptBgnDt": start_dt.strftime("%Y%m%d"),
+        "insttInptEndDt": end_dt.strftime("%Y%m%d"),
+        "inqryBgnDt": start_dt.strftime("%Y%m%d0000"),
+        "inqryEndDt": end_dt.strftime("%Y%m%d2359"),
+        "inqryDiv": "1"
     }
 
 
@@ -184,7 +181,6 @@ def get_g2b_data():
 
     for category, endpoint in ORDER_PLAN_ENDPOINTS:
         for keyword in keywords:
-            # 🎯 필수값인 bizNm을 채워주면서 모든 날짜 파라미터를 동시 탑재
             params = {
                 "type": "json",
                 "numOfRows": 100,
@@ -242,7 +238,7 @@ def load_and_compare(current_items):
     new_count = 0
     for item in current_items:
         current_key = f"{item['org']}_{item['title']}".strip()
-        if past_keys and current_key not in past_keys:
+        if not past_keys or current_key not in past_keys:
             item["is_new"] = True
             new_count += 1
             print(f"[신규] {item['title']} ({item['org']})")
@@ -339,37 +335,43 @@ def send_naver_email(subject, html_content):
         return False
 
 
-def send_slack_alert(items, new_count, date_str, errors):
-    if not SLACK_TOKEN or not SLACK_CHANNEL:
+def send_teams_alert(items, new_count, date_str, errors):
+    if not TEAMS_WEBHOOK_URL:
+        print("MS Teams 웹훅 URL이 설정되지 않아 알림을 건너뜁니다.")
         return
 
-    import requests
-
+    # 🎯 [Teams 복구] 외부 모듈(requests) 없이 내장 urllib만 사용하여 안전하게 포스트
     if errors and not items:
-        text = f"나라장터 발주계획 조회 오류 ({date_str})\n" + "\n".join(errors)
+        text = f"### 🚨 나라장터 발주계획 조회 오류 ({date_str})\n\n" + "\n".join([f"- {e}" for e in errors])
     else:
         text = (
-            f"나라장터 발주계획 리포트 ({date_str})\n"
-            f"총 {len(items)}건 / 신규 {new_count}건\n\n"
+            f"## 📋 나라장터 발주계획 리포트 ({date_str})\n"
+            f"**총 {len(items)}건 수집 / 신규 {new_count}건**\n\n"
         )
         for idx, item in enumerate(items[:20], 1):
-            badge = "*[NEW]* " if item["is_new"] else ""
+            badge = "🔥[NEW] " if item["is_new"] else ""
             text += (
-                f"{idx}. {badge}[{item['category']}] {item['title']}\n"
-                f"   기관: {item['org']} | 등록: {item['date']} | "
-                f"예산: {item['budget']} | 키워드: {item['keyword']}\n"
-                f"   {item['link']}\n"
+                f"{idx}. {badge}[{item['category']}] [{item['title']}]({item['link']})\n"
+                f"   - **기관**: {item['org']} | **등록일**: {item['date']} | **예산**: {item['budget']}\n"
+                f"   - **키워드**: {item['keyword']}\n\n"
             )
 
+    payload = {"text": text}
+    data = json.dumps(payload).encode("utf-8")
+
+    req = urllib.request.Request(
+        TEAMS_WEBHOOK_URL,
+        data=data,
+        headers={"Content-Type": "application/json; charset=utf-8"},
+        method="POST"
+    )
+
     try:
-        requests.post(
-            "https://slack.com/api/chat.postMessage",
-            headers={"Authorization": f"Bearer {SLACK_TOKEN}"},
-            json={"channel": SLACK_CHANNEL, "text": text},
-            timeout=10,
-        )
-    except requests.RequestException as exc:
-        print(f"Slack 알림 실패: {exc}")
+        with urllib.request.urlopen(req, timeout=15) as response:
+            response.read()
+        print("MS Teams 알림 발송 완료")
+    except Exception as exc:
+        print(f"MS Teams 알림 발송 중 오류 발생: {exc}")
 
 
 def send_alerts(items, new_count, errors):
@@ -384,8 +386,11 @@ def send_alerts(items, new_count, errors):
         subject = f"나라장터 발주계획 리포트 ({date_str})"
 
     html = build_html_report(items, errors, new_count, date_str)
+
+    # 1. 메일 발송
     send_naver_email(subject, html)
-    send_slack_alert(items, new_count, date_str, errors)
+    # 2. 복구된 팀즈 발송
+    send_teams_alert(items, new_count, date_str, errors)
 
     if items:
         print(f"검색 완료: {len(items)}건 (신규 {new_count}건)")
