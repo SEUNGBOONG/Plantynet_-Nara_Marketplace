@@ -13,7 +13,7 @@ from email.utils import formataddr
 API_BASE = "https://apis.data.go.kr/1230000/ao/OrderPlanSttusService"
 HISTORY_FILE = "last_g2b_data.txt"
 
-# 환경변수 정의 (Slack 제거 및 Teams 추가)
+# 깃허브 액션 Secrets 환경변수 매핑
 API_KEY = os.environ.get("DATA_GO_KR_API_KEY")
 NAVER_EMAIL = os.environ.get("NAVER_EMAIL")
 NAVER_PASSWORD = os.environ.get("NAVER_PASSWORD")
@@ -340,7 +340,6 @@ def send_teams_alert(items, new_count, date_str, errors):
         print("MS Teams 웹훅 URL이 설정되지 않아 알림을 건너뜁니다.")
         return
 
-    # 🎯 [Teams 복구] 외부 모듈(requests) 없이 내장 urllib만 사용하여 안전하게 포스트
     if errors and not items:
         text = f"### 🚨 나라장터 발주계획 조회 오류 ({date_str})\n\n" + "\n".join([f"- {e}" for e in errors])
     else:
@@ -389,7 +388,7 @@ def send_alerts(items, new_count, errors):
 
     # 1. 메일 발송
     send_naver_email(subject, html)
-    # 2. 복구된 팀즈 발송
+    # 2. MS Teams 발송
     send_teams_alert(items, new_count, date_str, errors)
 
     if items:
