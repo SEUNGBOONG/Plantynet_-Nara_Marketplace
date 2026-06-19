@@ -340,7 +340,6 @@ def send_teams_alert(items, new_count, date_str, errors):
         print("MS Teams 웹훅 URL이 설정되지 않아 알림을 건너뜁니다.")
         return
 
-    # 🎯 [신형 팀즈 워크플로우 규격 반영] MessageCard 포맷 구조화
     if errors and not items:
         title = f"🚨 나라장터 발주계획 조회 오류 ({date_str})"
         text = "\n".join([f"- {e}" for e in errors])
@@ -393,9 +392,7 @@ def send_alerts(items, new_count, errors):
 
     html = build_html_report(items, errors, new_count, date_str)
 
-    # 1. 메일 발송
     send_naver_email(subject, html)
-    # 2. 새로운 팀즈 워크플로우에 맞춤 발송
     send_teams_alert(items, new_count, date_str, errors)
 
     if items:
@@ -406,7 +403,22 @@ def send_alerts(items, new_count, errors):
         print("검색 완료: 조건에 맞는 발주계획이 없습니다.")
 
 
+# 🎯 수정 및 추가된 메인 실행 제어 루프
 if __name__ == "__main__":
-    raw_items, api_errors = get_g2b_data()
-    compared_items, new_detected = load_and_compare(raw_items)
-    send_alerts(compared_items, new_detected, api_errors)
+    kst_now = get_current_kst()
+    current_hour = kst_now.hour  # 한국 기준 현재 시간 (시)
+
+    # 알림을 받고자 하는 타겟 시간대 정의 (9시, 12시, 15시, 18시)
+    target_hours = [9, 12, 15, 18]
+
+    print(f"[현재 상태] 현재 한국 시간: {kst_now.strftime('%Y-%m-%d %H:%M:%S')}")
+
+    # Actions의 지연 작동을 감안하여 target 시간 정각 혹은 정각 직후 시간대일 때 정상 실행
+    if current_hour in target_hours:
+        print(f"[실행] 알림 지정 시간대({current_hour}시) 입니다. 데이터를 수집합니다.")
+        raw_items, api_errors = get_g2b_data()
+        compared_items, new_detected = load_and_compare(raw_items)
+        send_alerts(compared_items, new_detected, api_errors)
+    else:
+        # Actions 딜레이가 심해 다른 시간에 깨어나거나 매 시 정각 확인 중 타겟 시간이 아닐 때 처리
+        print(f"[스킵] 현재 {current_hour}시는 발주계획 알림 시간(9, 12, 15, 18시)이 아닙니다. 작업을 종료합니다.")
