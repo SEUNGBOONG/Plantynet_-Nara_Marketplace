@@ -254,9 +254,13 @@ def load_and_compare(current_items):
 
 
 def build_html_report(items, errors, new_count, date_str):
+    keywords = get_target_keywords()
+    keywords_str = ", ".join(keywords)
+
     if errors and not items:
         html = (
             f"<h2>나라장터 발주계획 조회 오류 ({date_str})</h2>"
+            f"<p>검색 키워드: <b>{keywords_str}</b></p>"
             "<p>API 조회 중 문제가 발생했습니다.</p><ul>"
         )
         for error in errors:
@@ -266,6 +270,7 @@ def build_html_report(items, errors, new_count, date_str):
 
     html = (
         f"<h2>나라장터 키워드 발주계획 리포트 ({date_str})</h2>"
+        f"<p>검색 키워드: <b>{keywords_str}</b></p>"
         f"<p>총 <b>{len(items)}</b>건 (신규 {new_count}건)</p>"
     )
 
@@ -340,12 +345,18 @@ def send_teams_alert(items, new_count, date_str, errors):
         print("MS Teams 웹훅 URL이 설정되지 않아 알림을 건너뜁니다.")
         return
 
+    keywords = get_target_keywords()
+    keywords_str = ", ".join(keywords)
+
     if errors and not items:
         title = f"🚨 나라장터 발주계획 조회 오류 ({date_str})"
-        text = "\n".join([f"- {e}" for e in errors])
+        text = f"**검색 키워드**: {keywords_str}\n\n" + "\n".join([f"- {e}" for e in errors])
     else:
         title = f"📋 나라장터 발주계획 리포트 ({date_str})"
-        text = f"**총 {len(items)}건 수집 / 신규 {new_count}건**\n\n"
+        text = (
+            f"**검색 키워드**: {keywords_str}\n\n"
+            f"**총 {len(items)}건 수집 / 신규 {new_count}건**\n\n"
+        )
         for idx, item in enumerate(items[:20], 1):
             badge = "🔥[NEW] " if item["is_new"] else ""
             text += (
