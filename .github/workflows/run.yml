@@ -1,29 +1,29 @@
-on:
-  schedule:
-    # 한국 시간(KST) 월~금 08시부터 19시까지 매 시간 정각에 트리거되도록 설정
-    # (GitHub Actions 지연에 대비하기 위해 폭넓게 매 시간 정각에 깨웁니다.)
-    # UTC 기준: 23시(한국 08시) ~ 다음날 10시(한국 19시)까지 매 시 정각
-    - cron: '0 23,0,1,2,3,4,5,6,7,8,9,10 * * 1-5'
-  workflow_dispatch: # 필요할 때 언제든 수동으로 실행할 수 있는 버튼 활성화
-
-jobs:
-  run-bot:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-
-      - name: Run python g2b_bot.py
-        run: python g2b_bot.py
-        env:
-          DATA_GO_KR_API_KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
-          TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
-          NAVER_EMAIL: ${{ secrets.NAVER_EMAIL }}
-          NAVER_PASSWORD: ${{ secrets.NAVER_PASSWORD }}
-          SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
-          SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL }}
+#on:
+#  schedule:
+#    # 한국 시간(KST) 월~금 08시부터 19시까지 매 시간 정각에 트리거되도록 설정
+#    # (GitHub Actions 지연에 대비하기 위해 폭넓게 매 시간 정각에 깨웁니다.)
+#    # UTC 기준: 23시(한국 08시) ~ 다음날 10시(한국 19시)까지 매 시 정각
+#    - cron: '0 23,0,1,2,3,4,5,6,7,8,9,10 * * 1-5'
+#  workflow_dispatch: # 필요할 때 언제든 수동으로 실행할 수 있는 버튼 활성화
+#
+#jobs:
+#  run-bot:
+#    runs-on: ubuntu-latest
+#    steps:
+#      - name: Checkout repository
+#        uses: actions/checkout@v3
+#
+#      - name: Set up Python
+#        uses: actions/setup-python@v4
+#        with:
+#          python-version: '3.10'
+#
+#      - name: Run python g2b_bot.py
+#        run: python g2b_bot.py
+#        env:
+#          DATA_GO_KR_API_KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
+#          TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+#          NAVER_EMAIL: ${{ secrets.NAVER_EMAIL }}
+#          NAVER_PASSWORD: ${{ secrets.NAVER_PASSWORD }}
+#          SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
+#          SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL }}
